@@ -1,0 +1,23 @@
+{
+  "id": "./",
+  "name": "SatPass – Satellite & ISS Pass Predictor",
+  "short_name": "SatPass",
+  "description": "Satellite and ISS pass predictor for ham radio: pass times, sky plot, live tracker and Doppler calculator. Works offline.",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "categories": ["utilities", "education", "navigation"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Upcoming passes", "url": "./#/passes", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Live tracker", "url": "./#/live", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Doppler", "url": "./#/doppler", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

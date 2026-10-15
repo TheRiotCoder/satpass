@@ -1,0 +1,16 @@
+const { ok, near, done } = require("./harness");
+const F = require("../js/format.js");
+ok("compass N/E/S/W", F.compass(0) === "N" && F.compass(90) === "E" && F.compass(180) === "S" && F.compass(270) === "W");
+ok("compass NE/SW/NNW", F.compass(45) === "NE" && F.compass(225) === "SW" && F.compass(337.5) === "NNW");
+ok("compass wraps 359.9 -> N, 360 -> N, -10 -> N", F.compass(359.9) === "N" && F.compass(360) === "N" && F.compass(-10) === "N");
+ok("compass boundaries 11.24 -> N, 11.26 -> NNE", F.compass(11.24) === "N" && F.compass(11.26) === "NNE");
+ok("UTC clock", F.clock(Date.UTC(2026, 9, 15, 3, 4, 5), true, true) === "03:04:05" && F.clock(Date.UTC(2026, 9, 15, 3, 4, 5), true) === "03:04");
+ok("UTC date", F.date(Date.UTC(2026, 9, 15, 3), true) === "Thu Oct 15");
+ok("dateKey", F.dateKey(Date.UTC(2026, 0, 5, 3), true) === "2026-01-05");
+ok("tzLabel utc", F.tzLabel(0, true) === "UTC");
+ok("duration", F.duration(65) === "1m 05s" && F.duration(600) === "10m 00s");
+ok("countdown", F.countdown(45000) === "45s" && F.countdown(750000) === "12m 30s" && F.countdown(7500000) === "2h 05m" && F.countdown(3 * 86400000 + 5 * 3600000) === "3d 5h");
+ok("age", F.age(3600000 * 5) === "5 h" && F.age(86400000 * 2.5) === "2.5 d");
+ok("signedHz", F.signedHz(-3500) === "−3,500 Hz" && F.signedHz(120) === "+120 Hz");
+ok("mhz", F.mhz(145.85e6, 3) === "145.850");
+done();

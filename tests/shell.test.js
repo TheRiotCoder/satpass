@@ -1,0 +1,26 @@
+// Static checks of the PWA shell: service-worker precache list, manifest, relative paths, vendored licence, no secrets.
+const { ok, done } = require("./harness"), fs = require("fs"), path = require("path");
+const root = path.join(__dirname, ".."), rd = f => fs.readFileSync(path.join(root, f), "utf8");
+const sw = rd("sw.js"), html = rd("index.html"), man = JSON.parse(rd("manifest.webmanifest"));
+const shell = JSON.parse(sw.slice(sw.indexOf("const SHELL = [") + 14, sw.indexOf("];", sw.indexOf("const SHELL = [")) + 1));
+ok("every SW precache entry exists", shell.every(f => f === "./" || fs.existsSync(path.join(root, f))), shell.filter(f => f !== "./" && !fs.existsSync(path.join(root, f))));
+const refs = [...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map(m => m[1]).filter(u => !/^https?:/.test(u));
+ok("every local asset referenced by index.html is precached", refs.every(r => shell.includes(r)), refs.filter(r => !shell.includes(r)));
+ok("index.html uses only relative asset paths", refs.every(r => !r.startsWith("/")), refs.filter(r => r.startsWith("/")));
+ok("every js/*.js module is precached", fs.readdirSync(path.join(root, "js")).filter(f => f.endsWith(".js")).every(f => shell.includes("js/" + f)));
+ok("manifest: relative start_url/scope/id, standalone", man.start_url.startsWith("./") && man.scope === "./" && man.id === "./" && man.display === "standalone");
+ok("manifest icons exist (incl. maskable)", man.icons.every(i => fs.existsSync(path.join(root, i.src))) && man.icons.some(i => i.purpose === "maskable"));
+ok("manifest shortcuts are relative", (man.shortcuts || []).every(s => s.url.startsWith("./")));
+ok("SW has a single VERSION constant", (sw.match(/const VERSION = "satpass-v[\d.]+"/g) || []).length === 1);
+ok("vendored satellite.js ships with its MIT licence", /MIT License/.test(rd("js/vendor/satellite.js-LICENSE.md")));
+ok(".nojekyll present (GitHub Pages)", fs.existsSync(path.join(root, ".nojekyll")));
+ok("no CDN / third-party script or style at runtime", !/<(script|link)[^>]+(https?:)?\/\/(?!celestrak)[a-z0-9.-]+\//i.test(html) && !/https?:\/\/[^"']*\.(js|css)["']/.test(html));
+const sources = ["index.html", "sw.js", ...fs.readdirSync(path.join(root, "js")).filter(f => f.endsWith(".js")).map(f => "js/" + f)];
+const urls = sources.flatMap(f => [...rd(f).matchAll(/https?:\/\/[^\s"'<>)]+/g)].map(m => new URL(m[0].replace(/[.,;]+$/, "")).host));
+const allowed = new Set(["celestrak.org", "www.amsat.org", "github.com", "www.w3.org"]);
+ok("runtime code only references expected hosts", urls.every(h => allowed.has(h)), [...new Set(urls)].filter(h => !allowed.has(h)));
+const secretRe = /(api[_-]?key|secret|passw(or)?d|auth[_-]?token|BEGIN (RSA|OPENSSH|PRIVATE)|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})/i;
+const files = []; (function walk(d) { for (const f of fs.readdirSync(d)) { if (f === ".git" || f === "vendor") continue; const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : /\.(js|html|css|json|md|py|webmanifest)$/.test(f) && files.push(p); } })(root);
+const hits = files.filter(f => !f.endsWith("shell.test.js") && secretRe.test(fs.readFileSync(f, "utf8"))).map(f => path.relative(root, f));
+ok("no secret-looking strings in tracked sources", hits.length === 0, hits);
+done();
