@@ -33,7 +33,7 @@
       ctx.strokeStyle = (track[i].visible && o.bright) ? "#fbbf24" : acc; ctx.beginPath(); ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.stroke();
     }
     // time ticks every minute (or 30 s for short passes), labelled
-    var tickMs = (track[track.length - 1].t - track[0].t) > 6 * 60000 ? 60000 : 30000;
+    var durMs = track[track.length - 1].t - track[0].t, tickMs = durMs > 40 * 60000 ? Math.ceil(durMs / 10 / 600000) * 600000 : durMs > 6 * 60000 ? 60000 : 30000;
     var firstTick = Math.ceil(track[0].t / tickMs) * tickMs;
     ctx.font = "10px system-ui,sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = mu; ctx.strokeStyle = mu; ctx.lineWidth = 1;
     for (var t = firstTick; t < track[track.length - 1].t; t += tickMs) {
@@ -45,7 +45,7 @@
     // AOS / TCA / LOS markers
     function mark(s, color, label, dx) { var q = pt(s.az, s.el); ctx.beginPath(); ctx.arc(q[0], q[1], 6, 0, 2 * Math.PI); ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = css("--bg", "#0b1220"); ctx.lineWidth = 2; ctx.stroke();
       ctx.fillStyle = fg; ctx.font = "bold 11px system-ui,sans-serif"; ctx.textAlign = "center"; ctx.fillText(label, q[0] + (dx || 0), q[1] - 13); }
-    mark(track[0], good, "AOS"); mark(track[track.length - 1], bad, "LOS");
+    mark(track[0], good, "AOS"); mark(track[track.length - 1], bad, o.truncated ? "limit" : "LOS");
     if (o.tca) { var tc = interp(track, o.tca); if (tc) { var q2 = pt(tc.az, tc.el); ctx.beginPath(); ctx.arc(q2[0], q2[1], 4, 0, 2 * Math.PI); ctx.fillStyle = fg; ctx.fill(); ctx.font = "11px system-ui,sans-serif"; ctx.fillText("max " + Math.round(tc.el) + "°", q2[0], q2[1] + 14); } }
     if (o.now && o.now >= track[0].t && o.now <= track[track.length - 1].t) {
       var n = interp(track, o.now); if (n) { var qn = pt(n.az, n.el); ctx.beginPath(); ctx.arc(qn[0], qn[1], 9, 0, 2 * Math.PI); ctx.strokeStyle = "#f472b6"; ctx.lineWidth = 3; ctx.stroke(); ctx.beginPath(); ctx.arc(qn[0], qn[1], 4, 0, 2 * Math.PI); ctx.fillStyle = "#f472b6"; ctx.fill(); ctx.fillStyle = "#f472b6"; ctx.font = "bold 11px system-ui,sans-serif"; ctx.fillText("NOW", qn[0], qn[1] + 22); }

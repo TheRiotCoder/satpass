@@ -23,7 +23,7 @@
   }
   function makeObserver(latDeg, lonDeg, altM) {
     if (!(latDeg >= -90 && latDeg <= 90)) fail("Latitude must be between -90 and 90");
-    if (!(lonDeg >= -180 && lonDeg <= 360)) fail("Longitude must be between -180 and 180");
+    if (!(lonDeg >= -180 && lonDeg <= 180)) fail("Longitude must be between -180 and 180 (east positive; use -90, not 270)");
     altM = altM || 0;
     var lat = latDeg * D2R, lon = lonDeg * D2R, h = altM / 1000;
     var sl = Math.sin(lat), cl = Math.cos(lat), so = Math.sin(lon), co = Math.cos(lon);
@@ -126,44 +126,55 @@
       satName: sat.name, norad: sat.norad, aos: aos, tca: m.t, los: los,
       aosAz: a.az, tcaAz: tc.az, losAz: l.az, maxEl: tc.el, durationSec: (los - aos) / 1000, rangeAtTcaKm: tc.rangeKm,
       visible: vis0 !== null, visStart: vis0, visEnd: vis1, sunlitAtTca: tc.sunlit, sunElAtTca: tc.sunEl,
-      inProgressAtStart: !!flags.inProgress, truncated: !!flags.truncated
+      inProgressAtStart: false, aosBeforeStart: false, losAfterWindow: false, truncated: !!flags.truncated, aosTruncated: !!flags.aosTruncated
     };
   }
-  /* findPasses(sat, obs, startMs, endMs, {minEl=10, stepSec=20}) -> [pass] sorted by AOS.
-     AOS/LOS are the times the satellite crosses `minEl`; passes that never reach minEl are not listed. */
+  /* findPasses(sat, obs, startMs, endMs, {minEl=10, stepSec=30, maxOverrunMs=14 h}) -> [pass] sorted by AOS.
+     AOS/LOS are the times the satellite crosses `minEl`; passes that never reach minEl are not listed.
+     Window semantics (a pass is reported if any part of it overlaps [startMs, endMs] and it begins no later than endMs):
+       - pass already in progress at startMs: reported with its TRUE AOS (found by looking back up to 24 h) and
+         aosBeforeStart = inProgressAtStart = true (aosTruncated = true if it has been up for more than 24 h);
+       - pass still open at endMs: the LOS search continues past the window end until the pass really ends, bounded by
+         maxOverrunMs (default 14 h, enough for AO-10-style passes); losAfterWindow = true. If LOS still can't be found the pass
+         is kept, LOS = the search limit (a lower bound) and truncated = true.
+     Scan: adaptive step outside a pass (10 s when the elevation is within ~20° of the threshold, up to stepSec = 30 s when far
+     below it), 20 s inside a pass, plus local-maximum detection so a pass that peaks just above minEl between two samples is
+     refined and found (grazing passes). Passes shorter than 0.2 s above minEl (numerical noise) are ignored. */
+  var MIN_DURATION_MS = 200, MIN_STEP_MS = 10000, IN_PASS_STEP_MS = 20000, EL_RATE_BOUND_DEG_S = 2, GRAZE_MARGIN_DEG = 3, DEFAULT_OVERRUN_MS = 14 * 3600000, BACKTRACK_LIMIT_MS = 24 * 3600000;
   function findPasses(sat, obs, startMs, endMs, opts) {
     opts = opts || {};
-    var minEl = opts.minEl === undefined ? 10 : opts.minEl, step = (opts.stepSec || 20) * 1000, out = [];
-    if (sat.geo) return out;
-    if (!(endMs > startMs)) return out;
-    var t = startMs, e = elAt(sat, obs, t), inPass = false, aos = null, tMax = t, eMax = -90, flags = {};
-    if (e >= minEl) { // already above: walk back to the real AOS
-      var back = t, limit = t - 14 * 3600000, stride = 60000;
+    var minEl = opts.minEl === undefined ? 10 : opts.minEl, maxStep = Math.max(1000, (opts.stepSec || 30) * 1000), minStep = Math.min(MIN_STEP_MS, maxStep), inStep = Math.min(IN_PASS_STEP_MS, maxStep);
+    var overrun = opts.maxOverrunMs === undefined ? DEFAULT_OVERRUN_MS : Math.max(0, opts.maxOverrunMs), hardEnd = endMs + overrun, out = [];
+    if (sat.geo || !(endMs > startMs)) return out;
+    var t = startMs, e = elAt(sat, obs, t), inPass = false, aos = 0, tMax = t, eMax = -90, flags = {}, tp = null, ep = 0, tn, en, step;
+    function push(aosT, losT, tPeak, fl) { if (losT - aosT >= MIN_DURATION_MS) out.push(finishPass(sat, obs, aosT, losT, tPeak, fl)); }
+    if (e >= minEl) { // already above the threshold: walk back to the real AOS
+      var back = t, limit = t - BACKTRACK_LIMIT_MS, stride = 60000;
       while (back > limit && elAt(sat, obs, back) >= minEl) back -= stride;
-      if (back > limit) { aos = bisectCross(sat, obs, back, back + stride, minEl, true); }
-      else aos = back;                     // above for >14 h: treat as continuous
-      inPass = true; flags = { inProgress: aos < startMs }; tMax = t; eMax = e;
+      if (back > limit) aos = bisectCross(sat, obs, back, back + stride, minEl, true);
+      else { aos = back; flags.aosTruncated = true; }   // above the threshold for more than 24 h: AOS is a lower bound
+      inPass = true; tMax = t; eMax = e;
     }
-    for (t = startMs + step; ; t += step) {
-      var tt = Math.min(t, endMs + step);                      // run one step past the end so a pass in progress can finish
-      e = elAt(sat, obs, tt);
-      if (!inPass && e >= minEl) {
-        aos = bisectCross(sat, obs, tt - step, tt, minEl, true); inPass = true; flags = {}; tMax = tt; eMax = e;
-        if (aos > endMs) break;
-      } else if (inPass) {
-        if (e > eMax) { eMax = e; tMax = tt; }
-        if (e < minEl) {
-          var los = bisectCross(sat, obs, tt - step, tt, minEl, false);
-          out.push(finishPass(sat, obs, aos, los, tMax, flags)); inPass = false; eMax = -90;
-        }
+    for (;;) {
+      if (inPass) {
+        if (t >= hardEnd) { flags.truncated = true; push(aos, t, tMax, flags); inPass = false; break; }   // LOS not found within the overrun limit
+        tn = Math.min(t + inStep, hardEnd); en = elAt(sat, obs, tn);
+        if (en > eMax) { eMax = en; tMax = tn; }
+        if (en < minEl) { push(aos, bisectCross(sat, obs, t, tn, minEl, false), tMax, flags); inPass = false; tp = null; }
+        t = tn; e = en;
+        continue;
       }
-      if (tt >= endMs + step) break;
-      if (!inPass && tt > endMs) break;
+      if (t >= endMs) break;
+      step = Math.min(maxStep, Math.max(minStep, (minEl - e) / EL_RATE_BOUND_DEG_S * 1000));
+      tn = Math.min(t + step, endMs); en = elAt(sat, obs, tn);
+      if (en >= minEl) { aos = bisectCross(sat, obs, t, tn, minEl, true); inPass = true; flags = {}; tMax = tn; eMax = en; }
+      else if (tp !== null && e >= ep && e >= en && e > minEl - GRAZE_MARGIN_DEG) {   // local maximum just below the threshold: does the true peak clear it?
+        var m = maxElevation(sat, obs, tp, tn, t);
+        if (m.el >= minEl) push(bisectCross(sat, obs, tp, m.t, minEl, true), bisectCross(sat, obs, m.t, tn, minEl, false), m.t, {});
+      }
+      tp = t; ep = e; t = tn; e = en;
     }
-    if (inPass && out.length === 0 && aos !== null && aos <= endMs) { // never ended within the search (very high orbit)
-      out.push(finishPass(sat, obs, aos, Math.min(t, endMs), tMax, { truncated: true, inProgress: flags.inProgress }));
-    }
-    // drop passes that begin after the window; keep one in progress at start
+    out.forEach(function (p) { p.aosBeforeStart = p.aos < startMs; p.inProgressAtStart = p.aosBeforeStart; p.losAfterWindow = p.los > endMs; });
     return out.filter(function (p) { return p.aos <= endMs && p.los >= startMs; });
   }
   // samples every stepSec (aligned to AOS) plus the exact LOS: [{t, az, el, rangeKm, rrKmS, sunlit, visible}]

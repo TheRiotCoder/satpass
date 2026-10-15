@@ -53,14 +53,29 @@ Propagation uses **[satellite.js](https://github.com/shashwatak/satellite-js) 6.
 
 Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry, az/el/range/range-rate, Meeus low-precision sun position (~0.01°), cylindrical Earth-shadow test, pass search (20 s sampling + bisection for AOS/LOS, golden-section for max elevation), Doppler, `.ics`, Maidenhead.
 
+## Approximations (read this)
+
+- **Geometric elevation.** Elevations, AOS and LOS use the geometric (airless) direction to the satellite. Atmospheric refraction (about 0.5° at the horizon, less higher up) is ignored, so a real signal can appear slightly before the predicted AOS and fade slightly after LOS. AOS/LOS are the times the satellite crosses your *minimum elevation* (default 10°), where refraction is only a few arc-minutes.
+- **Cylindrical Earth shadow.** "Sunlit" uses a simple cylinder of radius 6378.137 km behind a spherical Earth. There is no penumbra, atmosphere or oblateness, so sunlit/eclipse transitions are good to a few seconds. The sun position is a low-precision (about 0.01°) formula.
+- **−6° visibility rule.** A pass is flagged VISIBLE when the satellite is sunlit, above the horizon, and the sun is more than 6° below your horizon (civil twilight). That is a rule of thumb: brightness (size, range, phase angle), sky glow, weather and terrain also matter. Only bright objects (ISS, Tiangong) get the tag.
+
+## How passes are found
+
+`SatPasses.findPasses(sat, obs, startMs, endMs, {minEl, stepSec, maxOverrunMs})` scans with an adaptive step (10 s when the elevation is within ~20° of the threshold, up to 30 s when far below it, 20 s inside a pass) and detects local elevation maxima, so a pass that only just clears the threshold between two samples (a few seconds above it) is still found. AOS/LOS are bisected to 0.1 s. Window edges:
+
+- **In progress at the start:** the pass is returned with its *true* AOS (found by looking back up to 24 h), `aosBeforeStart = true` (alias `inProgressAtStart`).
+- **Still open at the end:** the pass is kept and LOS is searched past the window end until it really ends (bounded by `maxOverrunMs`, default 14 h, enough for AO-10-style passes); `losAfterWindow = true`.
+- **LOS (or AOS) not found within the limit:** the pass is kept, the time is a lower bound and `truncated = true` (`aosTruncated` for the AOS side). The app shows "LOS ≥" on the list and a warning on the detail page.
+
 ## Tests
 
 ```
-node tests/run-all.js                                       # 172 pure-module unit tests (Node 18+)
+node tests/run-all.js                                       # pure-module unit + regression tests (Node 18+)
 node --experimental-websocket tests/browser-smoke.js        # headless Chrome (CDP) end-to-end, served under /satpass/
 SKIP_NET=1 node --experimental-websocket tests/browser-smoke.js   # same, without touching celestrak.org
 python3 -m venv /tmp/pyv && /tmp/pyv/bin/pip install sgp4 skyfield   # independent cross-check:
 node tests/crosscheck/dump.js > /tmp/d.json && /tmp/pyv/bin/python tests/crosscheck/crosscheck.py /tmp/d.json
+node tests/crosscheck/dump_matrix.js > /tmp/m.json && /tmp/pyv/bin/python tests/crosscheck/brute_passes.py /tmp/m.json   # 1-s brute-force pass finder vs findPasses over sat x observer x minEl
 ```
 
 The cross-check compares our output with python-sgp4 and Skyfield (JPL DE421) for all bundled satellites (positions < 0.3 m), pass AOS/TCA/LOS for ISS, SO-50, AO-7, RS-44, NOAA 19, AO-10 and AO-91 (< 0.25 s), az/el, range-rate, sun elevation and sunlit state.

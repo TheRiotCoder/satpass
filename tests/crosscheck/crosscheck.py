@@ -54,8 +54,9 @@ for m in d['multi']:
     worst_ = 0
     for p in mine_:
         if rr_: worst_ = max(worst_, min(abs(p['aos'] - x) for x in rr_)/1000)
-        if ls_: worst_ = max(worst_, min(abs(p['los'] - x) for x in ls_)/1000)
-    report(f"{m['name'].strip()}: {len(mine_)} passes (skyfield rises {len(rr_)}), max AOS/LOS diff {worst_:.2f} s", worst_ <= 10 and abs(len(mine_) - len(rr_)) <= 1)
+        if ls_ and not p.get('losAfterWindow'): worst_ = max(worst_, min(abs(p['los'] - x) for x in ls_)/1000)   # skyfield only reports events inside the window
+        if p.get('losAfterWindow') and not p['los'] > d['t0'] + 3*86400000: worst_ = 1e9
+    report(f"{m['name'].strip()}: {len(mine_)} passes (skyfield rises {len(rr_)}), max AOS/LOS diff {worst_:.2f} s", worst_ <= 10 and abs(len(mine_) - len(rr_)) <= 1)  # (ours now also keeps the pass still open at the window end, with its true LOS)
 # 3. look angles
 ma = mr = me = mrr = 0
 for s in d['sample']:

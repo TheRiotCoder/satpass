@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw;
-  var DAY = 86400000, APP_VERSION = "1.0.0";
+  var DAY = 86400000, APP_VERSION = "1.0.1";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -191,9 +191,9 @@
         var live = p.aos <= now && p.los > now, e = entry(p.norad), old = e && Tle.isStale(e, now);
         html += '<button class="pass' + (live ? " live" : "") + '" data-n="' + p.norad + '" data-aos="' + Math.round(p.aos) + '" aria-label="' + esc(nameOf(p.norad)) + " pass at " + clk(p.aos) + '">' +
           '<div class="el">' + Math.round(p.maxEl) + '°<small>max el</small></div>' +
-          '<div class="t1">' + esc(nameOf(p.norad)) + " · " + clk(p.aos, true) + " → " + clk(p.los, true) + "</div>" +
-          '<div class="tg">' + (live ? '<span class="tag good">NOW</span>' : "") + (p.naked ? '<span class="tag vis">VISIBLE</span>' : "") + (old ? '<span class="tag warn">old TLE</span>' : "") + "</div>" +
-          '<div class="t2">' + F.compass(p.aosAz) + " " + Math.round(p.aosAz) + "° → " + F.compass(p.losAz) + " " + Math.round(p.losAz) + "° · " + F.duration(p.durationSec) + (live ? " · ends in " + F.countdown(p.los - now) : " · in " + F.countdown(p.aos - now)) + "</div></button>";
+          '<div class="t1">' + esc(nameOf(p.norad)) + " · " + (p.aosTruncated ? "≥ " : "") + clk(p.aos, true) + " → " + (p.truncated ? "≥ " : "") + clk(p.los, true) + "</div>" +
+          '<div class="tg">' + (live ? '<span class="tag good">NOW</span>' : "") + (p.truncated ? '<span class="tag warn" title="LOS not found within the search limit; shown time is a lower bound">LOS ≥</span>' : "") + (p.naked ? '<span class="tag vis">VISIBLE</span>' : "") + (old ? '<span class="tag warn">old TLE</span>' : "") + "</div>" +
+          '<div class="t2">' + F.compass(p.aosAz) + " " + Math.round(p.aosAz) + "° → " + F.compass(p.losAz) + " " + Math.round(p.losAz) + "° · " + (p.truncated ? "≥ " : "") + F.duration(p.durationSec) + (live ? " · ends in " + F.countdown(p.los - now) : " · in " + F.countdown(p.aos - now)) + "</div></button>";
       });
       box.innerHTML = html;
       $$(".pass", box).forEach(function (b) { b.onclick = function () { go("#/pass/" + b.dataset.n + "/" + b.dataset.aos); }; });
@@ -226,6 +226,7 @@
     if (!pass) {
       var cand = P.findPasses(sat, observer(), aos - 25 * 60000, aos + 25 * 60000, { minEl: S.settings.minEl }), best = Infinity;
       cand.forEach(function (p) { if (Math.abs(p.aos - aos) < best) { best = Math.abs(p.aos - aos); pass = p; } });
+      if (pass) { pass.aosBeforeStart = pass.inProgressAtStart = pass.losAfterWindow = false; }   // the ±25 min window here is artificial
     }
     if (!pass) { main.innerHTML = '<div class="banner warn">That pass is no longer available (the element sets or minimum elevation changed). <a class="link" href="#/passes">Back to passes</a></div>'; return; }
     setTitle(nameOf(n) + " pass");
@@ -239,21 +240,26 @@
       (old ? '<div class="banner warn">⚠️ This element set is ' + fmt(tleAge, 1) + " days old (> " + Tle.STALE_DAYS + "). Timing/position may be off – refresh on the Sats tab.</div>" : "") +
       '<div class="kv"><div class="big"><small>Max elevation</small><b>' + fmt(pass.maxEl, 0) + "°</b></div><div><small>Duration</small><b>" + F.duration(pass.durationSec) + "</b></div><div><small>Range at max el</small><b>" + Math.round(pass.rangeAtTcaKm).toLocaleString("en-US") + " km</b></div></div>" +
       '<div class="kv"><div><small>AOS ' + F.tzLabel(pass.aos, utc()) + "</small><b>" + clk(pass.aos, true) + "</b><br>" + az(pass.aosAz) + "</div><div><small>Max el (TCA)</small><b>" + clk(pass.tca, true) + "</b><br>" + az(pass.tcaAz) + "</div><div><small>LOS</small><b>" + clk(pass.los, true) + "</b><br>" + az(pass.losAz) + "</div></div>" +
-      '<p class="note">' + esc(visTxt) + (pass.inProgressAtStart ? " · in progress when computed" : "") + "</p>" +
+      '<p class="note">' + esc(visTxt) + (pass.inProgressAtStart ? " · already in progress when computed (AOS is the true start)" : "") + "</p>" +
+      (pass.truncated ? '<div class="banner warn">⚠️ This pass is still going at the search limit (very long pass, e.g. a high-orbit satellite). <b>LOS and duration are lower bounds.</b></div>' : "") +
+      (pass.aosTruncated ? '<div class="banner warn">⚠️ The satellite has been above the minimum elevation for more than 24 h; <b>AOS is a lower bound.</b></div>' : "") +
+      '<details class="more"><summary>How AOS/LOS and “visible” are decided</summary><p class="note">AOS/LOS = the satellite crosses your minimum elevation (' + S.settings.minEl + '°), using geometric elevation (no atmospheric refraction, which would add roughly 0.5° at the horizon). “Visible” = the satellite is sunlit (simple cylindrical Earth-shadow model, no penumbra), the sun is below −6° at your location (civil twilight), and the satellite is above your horizon. Real visibility also depends on brightness, sky glow, weather and terrain.</p></details>' +
       '<div class="canvaswrap"><canvas id="sky" role="img" aria-label="Sky plot of the pass"></canvas></div>' +
       '<p class="note">Sky plot: centre = overhead, rim = horizon, N up, E right. <span style="color:#22d3ee">━</span> track, <span style="color:#fbbf24">━</span> visible part (ISS/Tiangong), ticks = time ' + (utc() ? "(UTC)" : "(local)") + ", dashed ring = minimum elevation.</p>" +
       '<div class="actions"><button class="btn" id="icsOne">📅 Add to calendar (.ics)</button><button class="btn" id="remBtn"></button>' +
       (hasRadio ? '<a class="btn" href="#/doppler/' + n + "/" + Math.round(pass.aos) + '">📻 Doppler for this pass</a>' : "") + '<a class="btn" href="#/live/' + n + '">🌍 Live tracker</a></div>' +
       '<div class="note" id="remMsg"></div></section>' +
       '<section class="card"><h2>Az / El / Range</h2><div class="toolbar"><span class="muted">Step</span><span class="seg" id="stepSeg">' + [10, 20, 30].map(function (v) { return '<button data-v="' + v + '" class="' + (v === step ? "on" : "") + '">' + v + " s</button>"; }).join("") + '</span></div>' +
-      '<div class="tblwrap"><table><thead><tr><th>Time</th><th>Az</th><th></th><th>El</th><th>Range km</th><th>Rate km/s</th></tr></thead><tbody id="tbody"></tbody></table></div></section>' +
+      '<div class="note" id="stepNote"></div><div class="tblwrap"><table><thead><tr><th>Time</th><th>Az</th><th></th><th>El</th><th>Range km</th><th>Rate km/s</th></tr></thead><tbody id="tbody"></tbody></table></div></section>' +
       '<p class="disclaimer">Predicted from a TLE ' + F.age(Date.now() - e.epochMs) + " old (epoch " + new Date(e.epochMs).toISOString().slice(0, 16).replace("T", " ") + " UTC). Sat positions drift with TLE age (ISS: roughly 1–3 km/day along-track); treat times as ±several seconds when fresh, ±minutes when old.</p>";
-    var canvas = $("#sky"), track = P.trackPass(sat, observer(), pass.aos, pass.los, 5);
-    function drawSky() { var sz = Math.min(contentWidth(), 440); Dr.skyplot(canvas, sz, track, { utc: utc(), minEl: S.settings.minEl, tca: pass.tca, now: Date.now(), bright: pass.bright }); }
+    var canvas = $("#sky"), longStep = Math.max(1, Math.ceil(pass.durationSec / 800)), track = P.trackPass(sat, observer(), pass.aos, pass.los, Math.max(5, longStep));
+    function effStep() { return Math.max(step, Math.ceil(pass.durationSec / 300 / 10) * 10); }
+    function drawSky() { var sz = Math.min(contentWidth(), 440); Dr.skyplot(canvas, sz, track, { utc: utc(), minEl: S.settings.minEl, tca: pass.tca, now: Date.now(), bright: pass.bright, truncated: pass.truncated }); }
     function fillTable() {
-      var rows = P.trackPass(sat, observer(), pass.aos, pass.los, step), html = "";
+      var rows = P.trackPass(sat, observer(), pass.aos, pass.los, effStep()), html = "";
       rows.forEach(function (r) { html += '<tr data-t="' + Math.round(r.t) + '"><td>' + clk(r.t, true) + "</td><td>" + Math.round(r.az) + "°</td><td>" + F.compass(r.az) + "</td><td>" + fmt(r.el, 1) + "°</td><td>" + Math.round(r.rangeKm) + "</td><td>" + fmt(r.rrKmS, 2) + "</td></tr>"; });
       $("#tbody").innerHTML = html;
+      $("#stepNote").textContent = effStep() > step ? "Long pass: step increased to " + effStep() + " s to keep the table readable." : "";
     }
     function markNow() {
       var rows = $$("#tbody tr"), now = Date.now(), cur = null;
@@ -442,8 +448,7 @@
       var tbl = $("#dTbl"); if (!tbl) return;
       if (!sat || !S.hasLocation()) { tbl.innerHTML = ""; return; }
       if (!sel) { tbl.innerHTML = ""; return; }
-      var f = sats(), rows = D.series(P.trackPass(sat, observer(), sel.aos, sel.los, S.load("dopStep", 30)), f.up, f.down), el = {};
-      var tr = P.trackPass(sat, observer(), sel.aos, sel.los, S.load("dopStep", 30));
+      var dstep = Math.max(S.load("dopStep", 30), Math.ceil(sel.durationSec / 300 / 10) * 10), f = sats(), tr = P.trackPass(sat, observer(), sel.aos, sel.los, dstep), rows = D.series(tr, f.up, f.down);
       var hasUp = f.up != null, hasDown = f.down != null, html = "<table><thead><tr><th>Time</th><th>El</th><th>Rate km/s</th>" + (hasDown ? "<th>Rx MHz</th><th>Rx Δ Hz</th>" : "") + (hasUp ? "<th>Tx MHz</th><th>Tx Δ Hz</th>" : "") + "</tr></thead><tbody>";
       rows.forEach(function (r, i) { html += '<tr data-t="' + Math.round(r.t) + '"><td>' + clk(r.t, true) + "</td><td>" + fmt(tr[i].el, 0) + "°</td><td>" + fmt(r.rrKmS, 2) + "</td>" + (hasDown ? "<td>" + F.mhz(r.rxHz, 5) + "</td><td>" + Math.round(r.rxShiftHz).toLocaleString("en-US") + "</td>" : "") + (hasUp ? "<td>" + F.mhz(r.txHz, 5) + "</td><td>" + Math.round(r.txShiftHz).toLocaleString("en-US") + "</td>" : "") + "</tr>"; });
       tbl.innerHTML = html + "</tbody></table>"; markNow();
@@ -534,7 +539,8 @@
       '<section class="card" id="installCard"><h2>Install</h2><div id="installBody"></div></section>' +
       '<section class="card"><h2>About &amp; accuracy</h2><div class="note" style="margin-top:0"><p><b>SatPass ' + APP_VERSION + '</b> <span id="swVer" class="muted"></span></p>' +
       "<p><b>Accuracy:</b> orbits come from public two-line element sets (TLEs) propagated with SGP4/SDP4 (<a class='link' href='https://github.com/shashwatak/satellite-js' target='_blank' rel='noopener'>satellite.js</a>, MIT). A fresh LEO TLE is good to roughly a kilometre or two, which is a few seconds of timing; the error grows every day (ISS: up to ~10 km/day after reboosts or manoeuvres). Element sets older than " + Tle.STALE_DAYS + " days are flagged. Always confirm important passes with a live source.</p>" +
-      "<p><b>Visible passes</b> assume the satellite is in direct sunlight (cylindrical Earth shadow) while the sun is more than 6° below your horizon; brightness, weather and terrain are not modelled. Atmospheric refraction is ignored.</p>" +
+      "<p><b>Approximations:</b> (1) elevations are <i>geometric</i> – no atmospheric refraction (~0.5° at the horizon), so real AOS/LOS happen slightly earlier/later; (2) sunlit/eclipse uses a simple <i>cylindrical Earth shadow</i> (spherical Earth, no penumbra or atmosphere) – transitions are good to a few seconds; (3) a pass is flagged <i>visible</i> when the satellite is sunlit, above your horizon and the sun is below <b>−6°</b> (civil twilight) – a rule of thumb, since brightness, sky glow, weather and terrain also matter; only ISS/Tiangong get the tag. Sun position uses a low-precision formula (~0.01°).</p>" +
+      "<p><b>Long passes:</b> if a pass is already under way when computed, its true AOS is found by looking back (up to 24 h). A pass still open at the end of the window is followed until it ends (up to 14 h further); if it never ends within that limit it is marked <i>LOS ≥</i> (lower bound).</p>" +
       "<p><b>Frequencies</b> in the Doppler tab are approximate and change; verify with <a class='link' href='https://www.amsat.org/status/' target='_blank' rel='noopener'>AMSAT status</a>.</p>" +
       "<p><b>Data:</b> TLEs from <a class='link' href='https://celestrak.org' target='_blank' rel='noopener'>CelesTrak</a> (Dr. T.S. Kelso). Coastlines: Natural Earth (public domain). Not affiliated with CelesTrak, AMSAT or NASA.</p>" +
       '<p>Everything runs on your device; your location is never uploaded.</p></div>' +
@@ -629,5 +635,5 @@
       navigator.serviceWorker.addEventListener("controllerchange", function () { if (reloading || $("#update-bar").hidden) return; reloading = true; location.reload(); });
     }
   });
-  window.SatApp = { route: route, passesFor: passesFor, computePasses: computePasses };
+  window.SatApp = { route: route, passesFor: passesFor, computePasses: computePasses, _passCache: function () { return passCache; } };   // _passCache: test hook
 })();

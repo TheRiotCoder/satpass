@@ -168,6 +168,25 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   check('Doppler no overflow', await noOverflow());
   await shot('06-doppler', true);
 
+  // ---- long / truncated / in-progress passes in the UI (AO-10: ~10 h passes at min elevation 0)
+  await ev(`SatStore.set({ minEl: 0, days: 5 })`); await go('#/passes/14129'); await sleep(3000);
+  const aoRows = await ev(`document.querySelectorAll('.pass').length`);
+  check('AO-10 single-satellite passes list renders (long passes)', aoRows >= 1, aoRows);
+  await ev(`document.querySelector('.pass').click()`); await sleep(900);
+  const longInfo = await ev(`({ note: document.querySelector('#stepNote').textContent, rows: document.querySelectorAll('#tbody tr').length, ink: 0 })`);
+  check('long pass: step auto-increased, table kept to a readable size', /Long pass/.test(longInfo.note) && longInfo.rows > 20 && longInfo.rows < 600, longInfo);
+  check('long pass: sky plot drawn', (await canvasInk('#sky')) > 2000);
+  // force a truncated pass into the cache and check the UI says so (LOS not found within limit)
+  await ev(`(() => { const c = SatApp._passCache()[14129]; c.passes[0].truncated = true; })()`);
+  await go('#/passes/14129'); await ev(`SatApp.route()`); await sleep(1500);
+  check('truncated pass: list shows "LOS ≥" tag and ≥ time', await ev(`!!document.querySelector('.pass .tag.warn') && /LOS ≥/.test(document.querySelector('.pass .tg').textContent) && /≥/.test(document.querySelector('.pass .t1').textContent)`));
+  await ev(`document.querySelector('.pass').click()`); await sleep(700);
+  check('truncated pass: detail warns LOS/duration are lower bounds, plot labelled "limit"', await ev(`/lower bounds/.test(document.querySelector('main').textContent)`));
+  check('detail has the visibility/approximations help text', await ev(`/cylindrical Earth-shadow/.test(document.querySelector('details.more').textContent) && /refraction/.test(document.querySelector('details.more').textContent)`));
+  await go('#/settings'); await sleep(400);
+  check('About documents approximations (geometric, cylindrical shadow, -6°)', await ev(`/geometric/.test(document.body.textContent) && /cylindrical Earth shadow/.test(document.body.textContent) && /−6°/.test(document.body.textContent)`));
+  await ev(`SatStore.set({ minEl: 10, days: 3 })`);
+
   // ---- satellites
   await go('#/sats'); await ev(setVal('#q', 'so-50')); await sleep(300);
   check('search finds SO-50', await ev(`document.querySelectorAll('#satList .sat').length`) >= 1 && /SO-50/.test(await ev(`document.querySelector('#satList .sat .nm b').textContent`)));

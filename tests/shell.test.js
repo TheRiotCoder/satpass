@@ -19,6 +19,12 @@ const sources = ["index.html", "sw.js", ...fs.readdirSync(path.join(root, "js"))
 const urls = sources.flatMap(f => [...rd(f).matchAll(/https?:\/\/[^\s"'<>)]+/g)].map(m => new URL(m[0].replace(/[.,;]+$/, "")).host));
 const allowed = new Set(["celestrak.org", "www.amsat.org", "github.com", "www.w3.org"]);
 ok("runtime code only references expected hosts", urls.every(h => allowed.has(h)), [...new Set(urls)].filter(h => !allowed.has(h)));
+const appVer = (rd("js/app.js").match(/APP_VERSION = "([\d.]+)"/) || [])[1], swVer = (sw.match(/const VERSION = "satpass-v([\d.]+)"/) || [])[1];
+ok("sw.js VERSION matches APP_VERSION in app.js", !!appVer && appVer === swVer, [appVer, swVer]);
+const readme = rd("README.md"), appJs = rd("js/app.js");
+ok("README documents geometric elevation, cylindrical shadow and the -6° rule", /geometric/i.test(readme) && /cylindrical/i.test(readme) && /−6°|-6°/.test(readme) && /refraction/i.test(readme));
+ok("app About/help text documents the same approximations", /geometric/i.test(appJs) && /cylindrical Earth shadow/i.test(appJs) && /−6°/.test(appJs) && /refraction/i.test(appJs));
+ok("README documents in-progress / truncated pass handling", /aosBeforeStart/.test(readme) && /truncated/.test(readme) && /losAfterWindow/.test(readme));
 const secretRe = /(api[_-]?key|secret|passw(or)?d|auth[_-]?token|BEGIN (RSA|OPENSSH|PRIVATE)|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})/i;
 const files = []; (function walk(d) { for (const f of fs.readdirSync(d)) { if (f === ".git" || f === "vendor") continue; const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : /\.(js|html|css|json|md|py|webmanifest)$/.test(f) && files.push(p); } })(root);
 const hits = files.filter(f => !f.endsWith("shell.test.js") && secretRe.test(fs.readFileSync(f, "utf8"))).map(f => path.relative(root, f));

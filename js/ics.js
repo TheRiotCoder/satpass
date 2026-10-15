@@ -30,7 +30,7 @@
       "AOS " + utcStamp(pass.aos).slice(9, 15).replace(/(..)(..)(..)/, "$1:$2:$3") + " UTC, azimuth " + Math.round(pass.aosAz) + "° " + compass16(pass.aosAz),
       "Max elevation " + pass.maxEl.toFixed(0) + "° at " + utcStamp(pass.tca).slice(9, 15).replace(/(..)(..)(..)/, "$1:$2:$3") + " UTC, azimuth " + Math.round(pass.tcaAz) + "° " + compass16(pass.tcaAz),
       "LOS " + utcStamp(pass.los).slice(9, 15).replace(/(..)(..)(..)/, "$1:$2:$3") + " UTC, azimuth " + Math.round(pass.losAz) + "° " + compass16(pass.losAz),
-      "Duration " + Math.floor(pass.durationSec / 60) + "m " + Math.round(pass.durationSec % 60) + "s" + (pass.visible ? " – visible pass (sunlit satellite, dark sky)" : ""),
+      "Duration " + (pass.truncated ? "at least " : "") + Math.floor(pass.durationSec / 60) + "m " + Math.round(pass.durationSec % 60) + "s" + (pass.truncated ? " (LOS not found within the search limit)" : "") + (pass.visible ? " – visible pass (sunlit satellite, dark sky)" : ""),
       opts.observerLabel ? "Observer: " + opts.observerLabel : null,
       opts.tleAgeDays !== undefined ? "Prediction uses a TLE that is " + opts.tleAgeDays.toFixed(1) + " days old; accuracy degrades with TLE age." : null,
       "Predictions are estimates – check a live tracker before relying on them."

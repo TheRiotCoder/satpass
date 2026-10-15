@@ -27,4 +27,6 @@ ok("fold keeps multi-byte chars intact", I.fold("X".repeat(70) + "°°°°°°")
 ok("utcStamp", I.utcStamp(Date.UTC(2026, 0, 2, 3, 4, 5)) === "20260102T030405Z");
 const noAlarm = I.build(passes.slice(0, 1), { nowMs: 0 });
 ok("no VALARM when alarmMin = 0", !/VALARM/.test(noAlarm));
+const trunc = I.build([Object.assign({}, passes[0], { truncated: true })], { nowMs: 0 }).replace(/\r\n /g, "");
+ok("truncated pass: description says duration is a lower bound", /Duration at least/.test(trunc) && /LOS not found/.test(trunc));
 done();
