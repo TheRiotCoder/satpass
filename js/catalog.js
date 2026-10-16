@@ -12,9 +12,9 @@
   function grp(g) { return { id: g, q: "GROUP=" + g, fmt: "tle" }; }
   function cat(n) { return { id: "catnr" + n, q: "CATNR=" + n, fmt: "tle" }; }
   var CATEGORIES = [
-    { id: "amateur", label: "Amateur", core: true, fetch: [grp("amateur")] },
+    { id: "amateur", label: "Amateur", core: true, fetch: [grp("amateur"), cat(67291)] },   // 67291 = RS95S (QMR-KWT-2), not yet in GROUP=amateur
     { id: "stations", label: "Stations", core: true, fetch: [grp("stations")] },
-    { id: "weather", label: "Weather", core: true, fetch: [grp("weather"), cat(25338), cat(28654), cat(33591)] },   // NOAA 15/18/19 are not in GROUP=weather
+    { id: "weather", label: "Weather", core: true, fetch: [grp("weather")] },   // NOAA 15/18/19 were decommissioned in 2025 (no longer fetched)
     { id: "sar", label: "SAR", fetch: Sar.QUERIES.map(function (q) { return { id: q, q: q, fmt: "json" }; }), accept: function (s) { return Sar.isSar(s.norad, s.name); },
       note: "Synthetic-aperture radar satellites (curated list, see data/sar.js)" },
     { id: "eo", label: "Earth observation", fetch: [grp("resource")] },

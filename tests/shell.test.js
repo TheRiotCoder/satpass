@@ -18,7 +18,7 @@ ok("no CDN / third-party script or style at runtime", !/<(script|link)[^>]+(http
 const sources = ["index.html", "sw.js", ...fs.readdirSync(path.join(root, "js")).filter(f => f.endsWith(".js")).map(f => "js/" + f)];
 const stripCsp = t => t.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, "");
 const urls = sources.flatMap(f => [...stripCsp(rd(f)).matchAll(/https?:\/\/[^\s"'<>)]+/g)].filter(m => !/[*…]/.test(m[0])).map(m => new URL(m[0].replace(/[.,;]+$/, "")).host));
-const allowed = new Set(["celestrak.org", "www.amsat.org", "github.com", "www.w3.org", "eoportal.org", "space.oscar.wmo.int", "www.space-track.org", "db.satnogs.org", "api.n2yo.com", "www.n2yo.com", "satpass-proxy.yourname.workers.dev", "your-proxy.example.workers.dev", "example.invalid", "localhost", "127.0.0.1"]);
+const allowed = new Set(["celestrak.org", "www.amsat.org", "github.com", "www.w3.org", "eoportal.org", "space.oscar.wmo.int", "www.space-track.org", "www.ospo.noaa.gov", "db.satnogs.org", "api.n2yo.com", "www.n2yo.com", "satpass-proxy.yourname.workers.dev", "your-proxy.example.workers.dev", "example.invalid", "localhost", "127.0.0.1"]);
 ok("runtime code only references expected hosts", urls.every(h => allowed.has(h)), [...new Set(urls)].filter(h => !allowed.has(h)));
 const appVer = (rd("js/app.js").match(/APP_VERSION = "([\d.]+)"/) || [])[1], swVer = (sw.match(/const VERSION = "satpass-v([\d.]+)"/) || [])[1];
 ok("sw.js VERSION matches APP_VERSION in app.js", !!appVer && appVer === swVer, [appVer, swVer]);
@@ -60,4 +60,5 @@ ok("README documents data sources: CORS reality, proxy, credential storage, rate
 ok("About text documents data sources, proxy, privacy and terms", /Space-Track/.test(appJs) && /proxy/i.test(appJs) && /unencrypted/i.test(appJs) && /never bundles/.test(appJs));
 ok("no Space-Track data bundled (data/ and js/ contain no GP records of source Space-Track)", !fs.readdirSync(path.join(root, "data"), { recursive: true }).some(f => /space-?track/i.test(String(f))) && !/"ORIGINATOR"|"OBJECT_ID"\s*:/.test([...fs.readdirSync(path.join(root, "data")).filter(f => f.endsWith(".js")).map(f => rd("data/" + f)), ...snapFiles.map(f => rd("data/snap/" + f))].join("")));
 ok("credentials never rendered into the .ics exporter or the shared URL helpers", !/creds|apiKey|stPassword|satnogsToken|n2yoKey/i.test(rd("js/ics.js")));
+ok("v1.2.1: dead satellites (decommissioned / re-entered) get a 'No signal' banner on pass detail + Doppler, a NO SIGNAL tag in the pass list, and no stale-TLE nagging", /function deadBanner\(n\)/.test(rd("js/app.js")) && (rd("js/app.js").match(/deadBanner\(n\)/g) || []).length >= 3 && /NO SIGNAL · /.test(rd("js/app.js")) && /!R\.status\(n\) && Tle\.isStale/.test(rd("js/app.js")));
 done();

@@ -25,7 +25,7 @@ ok("bundled snapshot: all TLE checksums valid", p.errors.length === 0 && p.sats.
 ok("snapshot has fetchedAt timestamp", /^\d{4}-\d\d-\d\dT/.test(snap.fetchedAt), snap.fetchedAt);
 const R = require("../js/radio.js");
 const missing = R.CURATED.filter(c => !p.sats.some(s => s.norad === c.norad)).map(c => c.short);
-ok("curated satellites present in snapshot (allowed missing: AO-92, CAS-4A/B – not in CelesTrak GP)", missing.every(m => ["AO-92", "CAS-4A", "CAS-4B"].includes(m)), missing);
+ok("curated satellites present in snapshot (allowed missing: only re-entered ones – AO-92, CAS-4A/B – which radio.js marks via status())", missing.every(m => ["AO-92", "CAS-4A", "CAS-4B"].includes(m) && R.status(R.CURATED.find(c => c.short === m).norad).state === "re-entered") && missing.length === 3, missing);
 ok("ISS present", p.sats.some(s => s.norad === 25544));
 ok("radio table entries reference curated sats", Object.keys(R.RADIO).every(k => R.curated(+k)), Object.keys(R.RADIO).filter(k => !R.curated(+k)));
 ok("radio frequencies sane (VHF/UHF/HF)", Object.values(R.RADIO).flat().every(e => [e.up, e.down, e.upLo, e.downLo].filter(Boolean).every(f => f > 20e6 && f < 500e6)));

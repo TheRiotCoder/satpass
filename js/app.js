@@ -30,6 +30,8 @@
     try { var s = P.makeSat(e); satCache[n] = { l1: e.l1, l2: e.l2, sat: s }; return s; } catch (err) { console.warn(err.message); satCache[n] = { l1: e.l1, l2: e.l2, sat: null }; return null; }
   }
   function nameOf(n) { var c = R.curated(n), e = entry(n); return c ? c.short : (e ? e.name : "NORAD " + n); }
+  /* Satellites that no longer transmit (decommissioned / re-entered), see radio.js STATUS */
+  function deadBanner(n) { var st = R.status(n); return st ? '<div class="banner warn">🚫 <b>No signal.</b> ' + esc(st.text) + " Predicted passes below are geometric only – there is nothing to hear." + "</div>" : ""; }
   function longName(n) { var c = R.curated(n), e = entry(n); return c ? c.label : (e ? e.name : "NORAD " + n); }
   function observer() {
     var k = S.settings.lat + "|" + S.settings.lon + "|" + S.settings.alt;
@@ -277,7 +279,7 @@
     return { text: "Element sets from " + src + ", fetched " + new Date(d.fetchedAt).toLocaleString() + " (" + F.age(age) + " ago).", stale: stale, age: age };
   }
   function staleList(ids) {
-    var now = Date.now(); return ids.filter(function (n) { var e = entry(n); return e && Tle.isStale(e, now); });
+    var now = Date.now(); return ids.filter(function (n) { var e = entry(n); return e && !R.status(n) && Tle.isStale(e, now); });
   }
 
   /* ===================== PASSES ===================== */
@@ -344,7 +346,7 @@
         html += '<button class="pass' + (live ? " live" : "") + '" data-n="' + p.norad + '" data-aos="' + Math.round(p.aos) + '" aria-label="' + esc(nameOf(p.norad)) + " pass at " + clk(p.aos) + '">' +
           '<div class="el">' + Math.round(p.maxEl) + '°<small>max el</small></div>' +
           '<div class="t1">' + esc(nameOf(p.norad)) + " · " + (p.aosTruncated ? "≥ " : "") + clk(p.aos, true) + " → " + (p.truncated ? "≥ " : "") + clk(p.los, true) + "</div>" +
-          '<div class="tg">' + (live ? '<span class="tag good">NOW</span>' : "") + (p.truncated ? '<span class="tag warn" title="LOS not found within the search limit; shown time is a lower bound">LOS ≥</span>' : "") + (p.naked ? '<span class="tag vis">VISIBLE</span>' : "") + (old ? '<span class="tag warn">old TLE</span>' : "") + "</div>" +
+          '<div class="tg">' + (live ? '<span class="tag good">NOW</span>' : "") + (p.truncated ? '<span class="tag warn" title="LOS not found within the search limit; shown time is a lower bound">LOS ≥</span>' : "") + (p.naked ? '<span class="tag vis">VISIBLE</span>' : "") + (old ? '<span class="tag warn">old TLE</span>' : "") + (R.status(p.norad) ? '<span class="tag bad" title="' + esc(R.status(p.norad).text) + '">NO SIGNAL · ' + esc(R.status(p.norad).state) + '</span>' : "") + "</div>" +
           '<div class="t2">' + F.compass(p.aosAz) + " " + Math.round(p.aosAz) + "° → " + F.compass(p.losAz) + " " + Math.round(p.losAz) + "° · " + (p.truncated ? "≥ " : "") + F.duration(p.durationSec) + (live ? " · ends in " + F.countdown(p.los - now) : " · in " + F.countdown(p.aos - now)) + "</div></button>";
       });
       box.innerHTML = html;
@@ -388,7 +390,7 @@
       (!pass.sunlitAtTca ? "Not visible – satellite is in Earth's shadow" : (pass.sunElAtTca >= P.VISIBLE_SUN_EL ? "Not visible – sky too bright (sun " + fmt(pass.sunElAtTca, 0) + "° elevation)" : "Not visible"));
     var hasRadio = R.radios(n).length > 0, remKey = n + "-" + Math.round(pass.aos);
     main.innerHTML = '<a class="link" href="#/passes">← Passes</a>' +
-      '<section class="card"><h2>' + esc(longName(n)) + ' <span class="muted">· ' + F.date(pass.aos, utc()) + "</span></h2>" +
+      '<section class="card"><h2>' + esc(longName(n)) + ' <span class="muted">· ' + F.date(pass.aos, utc()) + "</span></h2>" + deadBanner(n) +
       (old ? '<div class="banner warn">⚠️ This element set is ' + fmt(tleAge, 1) + " days old (> " + Tle.STALE_DAYS + "). Timing/position may be off – refresh on the Sats tab.</div>" : "") +
       '<div class="kv"><div class="big"><small>Max elevation</small><b>' + fmt(pass.maxEl, 0) + "°</b></div><div><small>Duration</small><b>" + F.duration(pass.durationSec) + "</b></div><div><small>Range at max el</small><b>" + Math.round(pass.rangeAtTcaKm).toLocaleString("en-US") + " km</b></div></div>" +
       '<div class="kv"><div><small>AOS ' + F.tzLabel(pass.aos, utc()) + "</small><b>" + clk(pass.aos, true) + "</b><br>" + az(pass.aosAz) + "</div><div><small>Max el (TCA)</small><b>" + clk(pass.tca, true) + "</b><br>" + az(pass.tcaAz) + "</div><div><small>LOS</small><b>" + clk(pass.los, true) + "</b><br>" + az(pass.losAz) + "</div></div>" +
@@ -655,7 +657,7 @@
     S.save("dopSat", n);
     var nominalRadios = R.radios(n), liveRadios = S.liveRadios(n), radios = nominalRadios.concat(liveRadios), ri = R.pickIndex(radios.length, S.load("dopRadio:" + n, 0)), frac = S.load("dopFrac", 0.5);
     var radio = radios[ri], e = entry(n), sat = satObj(n), token = view.token;
-    main.innerHTML = '<div class="banner warn">⚠️ <b>Approximate.</b> ' + esc(R.DISCLAIMER) + " Frequencies, tones and operating modes change; many satellites are off or in safe mode for long periods.</div>" +
+    main.innerHTML = deadBanner(n) + '<div class="banner warn">⚠️ <b>Approximate.</b> ' + esc(R.DISCLAIMER) + " Frequencies, tones and operating modes change; many satellites are off or in safe mode for long periods.</div>" +
       '<div class="toolbar"><select class="inp" id="dSat" aria-label="Satellite">' + dopplerSatOptions(n, radioSats) + "</select>" +
       (radios.length > 1 ? '<select class="inp" id="dRadio" aria-label="Transponder / mode">' + (liveRadios.length ? '<optgroup label="Bundled table (nominal, default)">' : "") + radios.map(function (r, i) { return (liveRadios.length && i === nominalRadios.length ? '</optgroup><optgroup label="SatNOGS DB – live, fetched ' + esc(new Date(liveRadios[0].fetchedAt).toLocaleDateString()) + '">' : "") + '<option value="' + i + '"' + (i === ri ? " selected" : "") + ">" + esc(r.label) + "</option>"; }).join("") + (liveRadios.length ? "</optgroup>" : "") + "</select>" : "") + "</div>" +
       '<section class="card"><h2>' + esc(radio.label) + ' <span class="muted">· ' + esc(radio.mode) + "</span>" + (radio.live ? ' <span class="tag warn">SatNOGS live</span>' : "") + "</h2>" +

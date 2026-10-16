@@ -30,7 +30,7 @@ const ids = a => a.slice().sort((x, y) => x - y);
   {
     const { S, lazy } = load();
     ok("fresh install: favourites default to the curated favourites (incl. ISS)", S.isFav(25544));
-    ok("core categories come from the bundled snapshot at start: amateur 95, stations 17, weather 75", S.members("amateur").length === 95 && S.members("stations").length === 17 && S.members("weather").length === 75, ["amateur", "stations", "weather"].map(c => S.members(c).length));
+    ok("core categories come from the bundled snapshot at start: amateur 96, stations 17, weather 72", S.members("amateur").length === 96 && S.members("stations").length === 17 && S.members("weather").length === 72, ["amateur", "stations", "weather"].map(c => S.members(c).length));
     ok("SAR / EO / navigation / science are NOT loaded until used (no satellites, no script requests yet)", ["sar", "eo", "nav", "science"].every(c => S.members(c).length === 0) && !S.data.byId[39634] && Object.keys(lazy).length === 0 && !S.allLoaded());
     ok("Sentinel-1A is unknown before the SAR snapshot is loaded", !S.data.byId[39634]);
     await S.ensure("sar");
@@ -58,7 +58,7 @@ const ids = a => a.slice().sort((x, y) => x - y);
     ok("no Starlink / OneWeb in any category", S.data.sats.every(s => !/STARLINK|ONEWEB/.test(s.name)));
     // the categories' fetch lists
     const q = id => Cat.BY_ID[id].fetch.map(f => Cat.queryUrl(f));
-    ok("core categories use GROUP=amateur|stations|weather (+ NOAA CATNR); nothing queries geostationary / starlink / oneweb / NAME=COSMO", q("amateur")[0].endsWith("GROUP=amateur&FORMAT=tle") && q("weather").length === 4 && Object.keys(Cat.BY_ID).every(id => q(id).every(u => !/starlink|oneweb|geo\b|NAME=COSMO&/i.test(u))));
+    ok("core categories use GROUP=amateur|stations|weather (+ CATNR=67291 RS95S, no NOAA 15/18/19 any more); nothing queries geostationary / starlink / oneweb / NAME=COSMO", q("amateur")[0].endsWith("GROUP=amateur&FORMAT=tle") && q("weather").length === 1 && q("amateur").length === 2 && q("amateur")[1].endsWith("CATNR=67291&FORMAT=tle") && Object.keys(Cat.BY_ID).every(id => q(id).every(u => !/starlink|oneweb|geo\b|NAME=COSMO&/i.test(u))));
     ok("EO / navigation / science use CelesTrak groups resource | gps-ops, galileo, glo-ops, beidou | science", q("eo").join().includes("GROUP=resource") && ["gps-ops", "galileo", "glo-ops", "beidou"].every(g => q("nav").join().includes("GROUP=" + g)) && q("science").join().includes("GROUP=science"));
     ok("SAR queries are NAME=/CATNR= (no CelesTrak SAR group) and never GROUP=radar (calibration spheres)", q("sar").every(u => /(NAME|CATNR)=/.test(u) && !/GROUP=radar/.test(u)) && q("sar").length === Sar.QUERIES.length);
     ok("SAR-only filter: satellites of a SAR query that are not on the curated list are dropped (accept)", Cat.BY_ID.sar.accept({ norad: 39634, name: "SENTINEL-1A" }) === true && Cat.BY_ID.sar.accept({ norad: 25544, name: "ISS (ZARYA)" }) === false);
@@ -85,7 +85,7 @@ const ids = a => a.slice().sort((x, y) => x - y);
     ok("the Sats-tab mode 'all' (a v1.0.1 value) is still valid and kept", JSON.parse(out["satpass:satMode"]) === "all");
     ok("schema is stamped (2) and the settings are written back", JSON.parse(out["satpass:settings"]).schema === 2);
     ok("the v1.0.1 TLE cache is still used (newer than the snapshot -> origin CelesTrak) and merged with the snapshot", S.data.origin === "CelesTrak" && S.data.sats.length >= 185 && !!S.data.byId[25544]);
-    ok("core categories still list their satellites after migration (no group lists existed in v1.0.1)", S.members("amateur").length === 95 && S.members("stations").length === 17);
+    ok("core categories still list their satellites after migration (no group lists existed in v1.0.1)", S.members("amateur").length === 96 && S.members("stations").length === 17);
     ok("refresh timing metadata kept (no immediate re-download after upgrade)", !S.nextAutoRefreshDue(Date.now()) && S.manualAllowed(Date.now(), "amateur") === false);
     const again = load({ ls: out }); ok("migrating twice changes nothing (idempotent)", JSON.stringify(again.S.settings.favs) === JSON.stringify([25544, 27607, 7530]) && again.S.settings.theme === "dark");
   }
@@ -106,7 +106,7 @@ const ids = a => a.slice().sort((x, y) => x - y);
     ok("… no query touches the Starlink / OneWeb / COSMOS mega groups", requests.every(u => !/starlink|oneweb|NAME=COSMO&|NAME=COSMOS|GROUP=radar/i.test(u)));
     ok("… membership is replaced by what CelesTrak returned, filtered by the curated list (the 2 ICEYE records)", r.ok && JSON.stringify(ids(S.members("sar"))) === JSON.stringify([100889, 100914]), [r, S.members("sar")]);
     ok("… origin becomes CelesTrak, stored in localStorage, manual refresh blocked for the next 2 h", S.catStatus("sar").origin === "CelesTrak" && !!ls["satpass:groups"] && JSON.parse(ls["satpass:groups"]).sar.ids.length === 2 && S.manualAllowed(Date.now(), "sar") === false && S.manualAllowed(Date.now() + 3 * 3600e3, "sar") === true);
-    ok("… other categories untouched", S.members("amateur").length === 95);
+    ok("… other categories untouched", S.members("amateur").length === 96);
     ok("… previously known TLEs of the old snapshot stay available (merge keeps satellites, e.g. Sentinel-1A TLE)", !!S.data.byId[39634]);
   }
   {
@@ -123,7 +123,7 @@ const ids = a => a.slice().sort((x, y) => x - y);
   {
     const { S, requests } = load({ fetch: () => ({ status: 200, body: fx("tle-25544.txt") }) });
     await S.refresh();
-    ok("core refresh asks for exactly GROUP=amateur, stations, weather and CATNR=25338, 28654, 33591 (6 requests) and nothing from the lazy categories", requests.length === 6 && ["GROUP=amateur", "GROUP=stations", "GROUP=weather", "CATNR=25338", "CATNR=28654", "CATNR=33591"].every(k => requests.some(u => u.includes(k))) && requests.every(u => /FORMAT=tle$/.test(u)), requests);
+    ok("core refresh asks for exactly GROUP=amateur, stations, weather and CATNR=67291 (4 requests; decommissioned NOAA 15/18/19 are no longer fetched) and nothing from the lazy categories", requests.length === 4 && ["GROUP=amateur", "GROUP=stations", "GROUP=weather", "CATNR=67291"].every(k => requests.some(u => u.includes(k))) && requests.every(u => /FORMAT=tle$/.test(u)), requests);
   }
   // ---------- on-demand lookup guard
   {
