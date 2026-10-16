@@ -4,8 +4,9 @@
    vault DATA KEY (see SatSources.wrapSecret / createVault) – never the passphrase. Nothing secret is stored here: this module only talks to the authenticator.
    SHARED-ORIGIN LIMIT: rpId cannot be narrower than the host, and localStorage (which holds the wrapped record) is per origin. On a host shared by several
    apps (e.g. <user>.github.io, where every project site is one origin) a sibling app can read the record and ask the same passkey for the PRF output after
-   one biometric tap, so biometric unlock is NOT offered there (SatSources.sharedOrigin). It is offered on localhost, custom domains and dedicated hosts
-   (a Netlify / Cloudflare Pages site is its own origin). */
+   one biometric tap, so biometric unlock is NOT offered there (SatSources.sharedOrigin). It is offered on localhost and on hosts that are NOT detectably shared;
+   the page cannot know what else lives on its host, so a GitHub Pages custom domain (which serves every project repo of the account from one origin) must not be used
+   for this - use a host dedicated to SatPass (e.g. its own Netlify site). */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory(); else root.SatBio = factory();
 })(typeof self !== "undefined" ? self : this, function () {

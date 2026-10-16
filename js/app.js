@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.3.2";
+  var DAY = 86400000, APP_VERSION = "1.3.3";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -201,7 +201,7 @@
       if (!window.SatBio) return;
       SatBio.supported().then(function (sup) {
         if (!document.body.contains(box)) return;   // (the card may have been re-rendered while we asked)
-        if (sup.shared) { box.innerHTML = '<p class="note" id="bioShared">🔒 <b>Biometric unlock is not offered on this address</b> (' + esc(location.hostname) + '). Every app under this host shares the same browser storage and passkeys, so another app could use the biometric key to read the unlock record. To get Face ID / fingerprint unlock, host SatPass on its own origin (a Netlify site, a custom domain or localhost) – see “Hosting SatPass on its own origin” in the README. Your passphrase works everywhere.</p>'; return; }
+        if (sup.shared) { box.innerHTML = '<p class="note" id="bioShared">🔒 <b>Biometric unlock is not offered on this address</b> (' + esc(location.hostname) + '). Every app under this host shares the same browser storage and passkeys, so another app could use the biometric key to read the unlock record. To get Face ID / fingerprint unlock, host SatPass on a host used only by SatPass (its own Netlify site, or a custom domain that serves no other app – a GitHub Pages custom domain still shares one origin across all of the account’s projects) – see “Hosting SatPass on its own origin” in the README. Your passphrase works everywhere.</p>'; return; }
         if (!sup.ok && !info) return;
         function msg(t) { var m = $("#passMsg", el); if (m) m.textContent = t; }
         if (locked && info && sup.ok) {
@@ -209,11 +209,12 @@
           $("#bioUnlock", el).onclick = function () { msg("Waiting for Face ID / fingerprint…"); SS.bioUnlock(function (rec) { return SatBio.assertPrf(rec); }).then(function () { render(); $("#passMsg", el).textContent = "Unlocked."; }, function (e) { msg("✖ " + e.message + " You can still use your passphrase."); }); };
         } else if (!locked && SS.credMode() === "encrypted") {
           if (info) {
-            box.innerHTML = '<p class="note" id="bioOn">🔐 <b>Biometric unlock is on</b> for this device (set up ' + esc(new Date(info.created).toLocaleDateString()) + '). The passphrase still works and is your recovery.</p><div class="actions"><button type="button" class="btn sm" id="bioRemove">Turn off biometric unlock</button></div>';
+            box.innerHTML = '<p class="note" id="bioOn">🔐 <b>Biometric unlock is on</b> for this device (set up ' + esc(new Date(info.created).toLocaleDateString()) + '). Changing the passphrase changes the encryption key and switches this off (turn it on again afterwards). The passphrase still works and is your recovery.</p><div class="actions"><button type="button" class="btn sm" id="bioRemove">Turn off biometric unlock</button></div>';
             $("#bioRemove", el).onclick = function () { var rec = S.load("bio", null); SS.bioRemove(); (window.SatBio ? SatBio.forget(rec) : Promise.resolve()).then(function () { render(); $("#passMsg", el).textContent = "Biometric unlock turned off (you can also delete the “SatPass vault unlock” passkey in your device\'s passkey settings)."; }); };
           } else if (sup.ok) {
-            box.innerHTML = '<p class="note" id="bioHelp"><b>Unlock with biometrics (optional).</b> Uses a passkey on this device (Face ID, Touch ID, Android fingerprint, Windows Hello) to open the encrypted copy without typing the passphrase. Needs a browser with the WebAuthn PRF extension (iOS/iPadOS 18+, Android Chrome, desktop Chrome/Edge/Safari). The passphrase always remains the fallback. The passkey is created for this site\'s host, which is shared with other apps on the same GitHub Pages account – it is labelled “SatPass vault unlock (not a login)”, holds no account, and only protects an encrypted record that lives in this browser.</p><div class="actions"><button type="button" class="btn sm" id="bioEnable">Enable biometric unlock</button></div>';
+            box.innerHTML = '<p class="note" id="bioHelp"><b>Unlock with biometrics (optional).</b> Uses a passkey on this device (Face ID, Touch ID, Android fingerprint, Windows Hello) to open the encrypted copy without typing the passphrase. Needs a browser with the WebAuthn PRF extension (iOS/iPadOS 18+, Android Chrome, desktop Chrome/Edge/Safari). The passphrase always remains the fallback. The passkey is created for this host (“'+esc(location.hostname)+'”), is labelled “SatPass vault unlock (not a login)” and holds no account. <b>Only turn this on if SatPass is the only app served from this host</b> – every app on the same host could use the same passkey and read the unlock record. Changing the passphrase later changes the encryption key and switches this off (you turn it on again).</p><div class="actions"><button type="button" class="btn sm" id="bioEnable">Enable biometric unlock</button></div>';
             $("#bioEnable", el).onclick = function () {
+              if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) && !confirm("Biometric unlock is only safe if SatPass is the ONLY app served from " + location.hostname + " (apps on the same host share storage and passkeys – this includes a GitHub Pages custom domain that also serves your other project sites). Continue?")) return;
               msg("Waiting for Face ID / fingerprint…");
               SatBio.enroll().then(function (r) { return SS.bioSave({ credId: r.credId, prfSalt: r.prfSalt, rpId: r.rpId }, r.prf); }).then(function () { render(); $("#passMsg", el).textContent = "✔ Biometric unlock enabled. Lock now and try it."; }, function (e) { msg("✖ " + e.message); });
             };
@@ -256,11 +257,11 @@
       $("#passForm", el).onsubmit = function (ev) {
         ev.preventDefault();
         var pw = $("#passIn", el).value, m = $("#passMsg", el);
-        (SS.isLocked() ? SS.unlock(pw) : SS.lock(pw)).then(function () { m.textContent = SS.hasPassphrase() ? "Done – credentials are encrypted on this device." : "Done."; $("#passIn", el).value = ""; render(); }, function (e) { m.textContent = e && (e.kind === "config" || e.kind === "storage" || e.kind === "locked") ? e.message : "Wrong passphrase or unreadable data."; });
+        (SS.isLocked() ? SS.unlock(pw) : SS.lock(pw)).then(function (r) { var note = r && r.bioRemoved ? " Biometric unlock was switched off because the encryption key changed with the passphrase – turn it on again below (the new passphrase works meanwhile)." : ""; render(); $("#passMsg", el).textContent = (SS.hasPassphrase() ? "Done – credentials are encrypted on this device." : "Done.") + note; $("#passIn", el).value = ""; }, function (e) { m.textContent = e && (e.kind === "config" || e.kind === "storage" || e.kind === "locked") ? e.message : "Wrong passphrase or unreadable data."; });
       };
       var pr = $("#passRemove", el); if (pr) pr.onclick = function () { SS.removePassphrase().then(function () { $("#passMsg", el).textContent = "Passphrase removed – the encrypted copy was deleted; credentials now stay in this tab only (nothing is saved to local storage)."; render(); }); };
       $("#forgetCreds", el).onclick = function () { if (!confirm("Delete all stored Space-Track / SatNOGS / N2YO credentials and the proxy access token from this browser?")) return; SS.forgetCreds(); render(); $("#passMsg", el).textContent = "All credentials were deleted from this device."; };
-      var ln = $("#lockNow", el); if (ln) ln.onclick = function () { if (SS.lockNow()) { render(); $("#passMsg", el).textContent = "🔒 Locked – decrypted credentials were cleared from memory."; } };
+      var ln = $("#lockNow", el); if (ln) ln.onclick = function () { if (SS.lockNow()) SS.whenIdle().then(function () { if (!SS.isLocked()) return; render(); $("#passMsg", el).textContent = "🔒 Locked – decrypted credentials were cleared from memory."; }); };
       $("#lockIdle", el).onchange = function () { SS.setVaultCfg({ idleMin: this.value }); };
       $("#lockHidden", el).onchange = function () { SS.setVaultCfg({ hiddenMin: this.value }); };
       bioWire();

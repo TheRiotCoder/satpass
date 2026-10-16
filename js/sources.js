@@ -309,7 +309,10 @@
     return !!(r && typeof r === "object" && r.v === 2 && ok(r.credId, 1400) && ok(r.prfSalt, 100) && ok(r.rpId, 253) && ok(r.hk, 100) && ok(r.iv, 40) && ok(r.ct, 2000));
   }
   // Shared-origin hosts: every app under the same host name shares localStorage and can ask the same passkey, so biometric unlock is not offered there.
-  // github.io (user and project Pages sites) is one origin per user; a custom domain, localhost or a dedicated host (Netlify/Cloudflare Pages site) is its own origin.
+  // The page cannot tell whether OTHER apps live on its host. Known shared: *.github.io (all of an account's Pages sites). NOT detectable: a GitHub Pages custom domain on the
+  // user site (it serves every project repo of the account from that one origin, so it is just as shared) and any host that serves several apps. Biometric unlock therefore
+  // needs a host dedicated to SatPass (own Netlify/Cloudflare site, or a Pages custom domain used only by SatPass while the other apps live on other hosts) - the
+  // user's responsibility; see the README. localhost (development) is allowed.
   function sharedOrigin(host) { host = String(host || "").toLowerCase().replace(/\.$/, ""); return host === "github.io" || /\.github\.io$/.test(host); }
   // meta: {credId (base64url), prfSalt (base64), rpId}; prf: the 32-byte PRF output for prfSalt. What is wrapped is the random vault DATA KEY (never the passphrase).
   // Returns a Promise (a short PRF rejects, it does not throw).
@@ -335,17 +338,20 @@
   function vaultAad(kind, h) { return new TextEncoder().encode("satpass-vault-v2|" + kind + "|" + h.iter + "|" + h.salt); }
   function vaultHeader(blob) { return { iter: blob.iter, salt: blob.salt, wiv: blob.wiv, wk: blob.wk }; }
   function dataKey(c, dek) { return c.subtle.importKey("raw", dek, "AES-GCM", false, ["encrypt", "decrypt"]); }
+  // The key bytes are COPIED synchronously on entry: callers may zero their own array (lock) at any later moment without affecting an operation already in flight.
   function sealVault(creds, dek, hdr, c) {   // new ciphertext under the same wrapped key
+    var own = new Uint8Array(dek), snap = JSON.stringify(creds); hdr = { iter: hdr.iter, salt: hdr.salt, wiv: hdr.wiv, wk: hdr.wk };
     return Promise.resolve().then(function () {
-      c = getSubtle(c); var iv = c.getRandomValues(new Uint8Array(12));
-      return dataKey(c, dek).then(function (k) { return c.subtle.encrypt({ name: "AES-GCM", iv: iv, additionalData: vaultAad("creds", hdr) }, k, new TextEncoder().encode(JSON.stringify(creds))); })
+      c = getSubtle(c); dek = own; var iv = c.getRandomValues(new Uint8Array(12));
+      return dataKey(c, dek).then(function (k) { return c.subtle.encrypt({ name: "AES-GCM", iv: iv, additionalData: vaultAad("creds", hdr) }, k, new TextEncoder().encode(snap)); })
         .then(function (ct) { return { enc: 2, iter: hdr.iter, salt: hdr.salt, wiv: hdr.wiv, wk: hdr.wk, iv: b64(iv), ct: b64(ct) }; });
     });
   }
   // wrap `dek` (or a fresh random one) with a passphrase and seal the credentials -> {blob, dek}
   function createVault(creds, pass, dek, c) {
+    var snap = JSON.parse(JSON.stringify(creds || {})), own = dek ? new Uint8Array(dek) : null;   // (copies: never share a mutable key array across async work)
     return Promise.resolve().then(function () {
-      c = getSubtle(c); dek = dek || c.getRandomValues(new Uint8Array(32));
+      c = getSubtle(c); creds = snap; dek = own || c.getRandomValues(new Uint8Array(32));
       var salt = c.getRandomValues(new Uint8Array(16)), wiv = c.getRandomValues(new Uint8Array(12)), hdr = { iter: PBKDF2_ITER, salt: b64(salt), wiv: b64(wiv) };
       return deriveKey(c, pass, salt, PBKDF2_ITER).then(function (kek) { return c.subtle.encrypt({ name: "AES-GCM", iv: wiv, additionalData: vaultAad("dek", hdr) }, kek, dek); })
         .then(function (wk) { hdr.wk = b64(wk); return sealVault(creds, dek, hdr, c); }).then(function (blob) { return { blob: blob, dek: dek }; });

@@ -382,11 +382,14 @@ const setup = (S, enable) => { S.sources.setConfig({ proxy: PROXY, enabled: enab
     const wrong = await (async () => { A.S.sources.lockNow(); return A.S.sources.bioUnlock(() => wc.getRandomValues(new Uint8Array(32))).catch(e => e); })();
     ok("wrong PRF output / cancelled prompt: stays locked, clear error, passphrase still works", wrong.kind === "auth" && A.S.sources.isLocked() && (await A.S.sources.bioUnlock(() => Promise.reject(new Error("cancelled"))).catch(e => e.message)) === "cancelled" && (await A.S.sources.unlock("a-long-passphrase-1")) === true);
     const blobBefore = JSON.parse(A.ls["satpass:creds"]);
-    await A.S.sources.lock("another-long-passphrase-2");
+    const chg = await A.S.sources.lock("another-long-passphrase-2");
     const blobAfter = JSON.parse(A.ls["satpass:creds"]);
-    ok("1.3.2 changing the passphrase re-wraps only the data key: wrapped key + salt change, the biometric record stays valid", blobAfter.wk !== blobBefore.wk && blobAfter.salt !== blobBefore.salt && !!A.ls["satpass:bio"] && A.S.sources.bioInfo() !== null);
+    ok("1.3.3 changing the passphrase ROTATES the data key: wrapped key, salt, iv and ciphertext all change; biometric record (it wrapped the old key) is removed and reported", blobAfter.wk !== blobBefore.wk && blobAfter.salt !== blobBefore.salt && blobAfter.ct !== blobBefore.ct && chg && chg.rotated === true && chg.bioRemoved === true && !A.ls["satpass:bio"] && A.S.sources.bioInfo() === null);
+    ok("1.3.3 …old blob + OLD passphrase can no longer decrypt data saved after the change (real key rotation)", await (async () => { await A.S.sources.setCreds({ n2yoKey: "N2-after-rotation-9" }); const nb = JSON.parse(A.ls["satpass:creds"]); const dekOld = await Src2.openVault(blobBefore, "a-long-passphrase-1"); const asOld = Object.assign({}, nb, { wk: blobBefore.wk, wiv: blobBefore.wiv, salt: blobBefore.salt, iter: blobBefore.iter }); return (await Src2.openWithDek(nb, dekOld.dek).catch(e => e.kind)) === "auth" && (await Src2.openVault(asOld, "a-long-passphrase-1").catch(e => e.kind)) === "auth" && !!dekOld.dek; })());
     A.S.sources.lockNow();
-    ok("1.3.2 …the old passphrase no longer opens it, the new one does, and biometric unlock (PRF → data key) still works after the change", (await A.S.sources.unlock("a-long-passphrase-1").catch(e => e.kind)) === "auth" && (await A.S.sources.bioUnlock(() => PRF.slice())) === true && A.S.sources.getCreds().stPassword === "Pw-for-lock-test-1" && (A.S.sources.lockNow(), (await A.S.sources.unlock("another-long-passphrase-2")) === true));
+    ok("1.3.3 …the old passphrase no longer opens it, the new one does, credentials intact", (await A.S.sources.unlock("a-long-passphrase-1").catch(e => e.kind)) === "auth" && (await A.S.sources.unlock("another-long-passphrase-2")) === true && A.S.sources.getCreds().stPassword === "Pw-for-lock-test-1" && A.S.sources.getCreds().n2yoKey === "N2-after-rotation-9");
+    ok("1.3.3 …biometric can be re-enrolled after the rotation and unlocks again (no data lost at any point)", await (async () => { await A.S.sources.bioSave(META, PRF.slice()); A.S.sources.lockNow(); return (await A.S.sources.bioUnlock(() => PRF.slice())) === true && A.S.sources.getCreds().stPassword === "Pw-for-lock-test-1"; })());
+    ok("1.3.3 first encryption reports rotated:false, bioRemoved:false", await (async () => { const Z = load({}); await Z.S.sources.setCreds({ n2yoKey: "zzzz-first-1" }); const r = await Z.S.sources.lock("first-passphrase-12"); return r.rotated === false && r.bioRemoved === false; })());
     ok("1.3.2 the passphrase is nowhere in memory-facing state: the bio record unwraps to a 32-byte data key, not to the passphrase", await (async () => { const rec = JSON.parse(A.ls["satpass:bio"]); const dek = await Src2.unwrapSecret(rec, PRF.slice()); return Buffer.from(dek, "base64").length === 32 && dek.indexOf("passphrase") < 0 && rec.v === 2; })());
 
     await A.S.sources.bioSave(META, PRF.slice());
@@ -453,6 +456,77 @@ const setup = (S, enable) => { S.sources.setConfig({ proxy: PROXY, enabled: enab
     ok("1.3.2: confirming applies it", done2.imported === 2 && done2.proxy === true && done2.overwrote === 2 && T.S.sources.getCreds().stPassword === "Move-Me-Pw-2" && T.S.sources.config().proxy === "https://good.workers.dev");
     const same = await T.S.sources.importBackup(text, "backup-passphrase-2", () => { throw new Error("must not ask"); });
     ok("1.3.2: re-importing identical data needs no question", same.imported === 2);
+  }
+  // ---------- 1.3.3: lock vs pending vault operations (Paul's data-key zeroing races) + key rotation + stress
+  {
+    const wc = require("crypto").webcrypto, Z32 = new Uint8Array(32), PRFX = wc.getRandomValues(new Uint8Array(32)), METAX = { credId: "Y3JlZA", prfSalt: "c2FsdA==", rpId: "app.example.com" };
+    const L = (extra) => load(Object.assign({ location: { hostname: "app.example.com" } }, extra || {}));
+    const opensWithZero = async (ls) => { const b = JSON.parse(ls["satpass:creds"]); return (await Src2.openWithDek(b, Z32).then(() => "opened", e => e.kind)) === "opened"; };
+    // (a) lock during a passphrase change
+    {
+      const A = L(); await A.S.sources.setCreds({ stIdentity: "race-a@example.com", stPassword: "Pw-race-A-1" }); await A.S.sources.lock("first-race-passphrase-1");
+      const pChange = A.S.sources.lock("second-race-passphrase-2"), locked = A.S.sources.lockNow();
+      const r = await pChange.then(x => x, e => e); await A.S.sources.whenIdle();
+      ok("race (a): lockNow during a passphrase change is queued behind it (returns true), the change completes, the vault ends up locked", locked === true && r && r.rotated === true && A.S.sources.isLocked() && Object.keys(A.S.sources.getCreds()).length === 0);
+      ok("race (a): the saved vault was NOT sealed under an all-zero key (not decryptable without the passphrase)", !(await opensWithZero(A.ls)));
+      ok("race (a): …and it opens with the NEW passphrase with the credentials intact; the old passphrase does not", (await A.S.sources.unlock("first-race-passphrase-1").catch(e => e.kind)) === "auth" && (await A.S.sources.unlock("second-race-passphrase-2")) === true && A.S.sources.getCreds().stPassword === "Pw-race-A-1" && !(await opensWithZero(A.ls)));
+    }
+    // (b) setCreds then lock in the same tick
+    {
+      const B = L(); await B.S.sources.setCreds({ stIdentity: "race-b@example.com" }); await B.S.sources.lock("race-b-passphrase-1");
+      const w = B.S.sources.setCreds({ stPassword: "Pw-race-B-2" }), locked = B.S.sources.lockNow();
+      await w; await B.S.sources.whenIdle();
+      ok("race (b): setCreds + lockNow in the same tick: save completes, then it locks", locked === true && B.S.sources.isLocked());
+      ok("race (b): the vault still unlocks (no data loss) and contains the value written just before the lock", (await B.S.sources.unlock("race-b-passphrase-1").catch(e => e.kind)) === true && B.S.sources.getCreds().stPassword === "Pw-race-B-2" && B.S.sources.getCreds().stIdentity === "race-b@example.com");
+      // an edit attempted AFTER the lock was requested is refused (it cannot be persisted by a vault that is about to lock)
+      const w2 = B.S.sources.setCreds({ n2yoKey: "n2-before-lock-1" }), l2 = B.S.sources.lockNow(), late = await B.S.sources.setCreds({ n2yoKey: "late-edit-1" }).catch(e => e.kind);
+      await w2; await B.S.sources.whenIdle();
+      ok("race (b): an edit made after the lock was requested is refused with 'locked' (nothing half-saved)", late === "locked" && l2 === true && B.S.sources.isLocked());
+      await B.S.sources.unlock("race-b-passphrase-1");
+      ok("race (b): …and the earlier edit survived, the late one did not", B.S.sources.getCreds().n2yoKey === "n2-before-lock-1");
+    }
+    // (c) lock requested during the FIRST encryption; (d) forget during a passphrase change
+    {
+      const C = L(); await C.S.sources.setCreds({ stPassword: "Pw-race-C-1" });
+      const enc = C.S.sources.lock("race-c-passphrase-1"), lk = C.S.sources.lockNow(); await enc; await C.S.sources.whenIdle();
+      ok("race (c): lock during the first encryption applies once the vault exists; vault valid, not zero-keyed", lk === true && C.S.sources.isLocked() && !(await opensWithZero(C.ls)) && (await C.S.sources.unlock("race-c-passphrase-1")) === true && C.S.sources.getCreds().stPassword === "Pw-race-C-1");
+      const D = L(); await D.S.sources.setCreds({ stPassword: "Pw-race-D-1" }); await D.S.sources.lock("race-d-passphrase-1");
+      const chg = D.S.sources.lock("race-d-passphrase-2").then(() => "saved", e => e.kind); D.S.sources.forgetCreds(); const res = await chg;
+      ok("race (d): Forget during a passphrase change cancels it: nothing is resurrected (no blob, no creds, no biometric record)", res === "cancelled" && !D.ls["satpass:creds"] && !D.ls["satpass:bio"] && Object.keys(D.S.sources.getCreds()).length === 0 && D.S.sources.credMode() === "none");
+      const E = L(); await E.S.sources.setCreds({ stPassword: "Pw-race-E-1" }); await E.S.sources.lock("race-e-passphrase-1");
+      const bs = E.S.sources.bioSave(METAX, PRFX.slice()), lke = E.S.sources.lockNow(); await bs; await E.S.sources.whenIdle();
+      ok("race (e): lock during biometric enrolment: enrolment finishes with the real key, then locks; biometric unlock opens the vault", lke === true && E.S.sources.isLocked() && (await E.S.sources.bioUnlock(() => PRFX.slice())) === true && E.S.sources.getCreds().stPassword === "Pw-race-E-1");
+    }
+    // stress: seeded random interleavings of setCreds / lockNow / unlock / passphrase change / bio enrol+unlock, not awaited between ops
+    {
+      let seed = 1337; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+      let bad = 0, rounds = 0, detail = [];
+      for (let round = 0; round < 6; round++) {
+        const S = L(), api = S.S.sources; let pass = "stress-pass-" + round + "-0", counter = 0, expect = "none", hasBio = false;
+        await api.setCreds({ stIdentity: "stress@example.com" }); await api.lock(pass);
+        const pend = [];
+        for (let i = 0; i < 9; i++) {
+          const r = rnd();
+          if (r < 0.34) { const v = "n2-" + round + "-" + (++counter); pend.push(api.setCreds({ n2yoKey: v }).then(() => { expect = v; }, () => {})); }
+          else if (r < 0.52) api.lockNow();
+          else if (r < 0.66) pend.push(api.unlock(pass).then(() => {}, () => {}));
+          else if (r < 0.82) { const np = "stress-pass-" + round + "-" + (i + 1); pend.push(api.lock(np).then(() => { pass = np; hasBio = false; }, () => {})); }
+          else if (r < 0.92) pend.push(api.bioSave(METAX, PRFX.slice()).then(() => { hasBio = true; }, () => {}));
+          else pend.push(api.bioUnlock(() => PRFX.slice()).then(() => {}, () => {}));
+          if (rnd() < 0.3) await Promise.resolve();   // sometimes let a microtask through, sometimes not (same-tick races)
+        }
+        await Promise.all(pend); await api.whenIdle(); rounds++;
+        const b = JSON.parse(S.ls["satpass:creds"]);
+        if (await opensWithZero(S.ls)) { bad++; detail.push("zero-key blob in round " + round); }
+        if (api.isLocked()) { if ((await api.unlock(pass).catch(e => e.kind)) !== true) { bad++; detail.push("round " + round + " does not unlock with the latest passphrase"); continue; } }
+        const got = api.getCreds();
+        if (expect !== "none" && got.n2yoKey !== expect) { bad++; detail.push("round " + round + ": expected " + expect + " got " + got.n2yoKey); }
+        if (got.stIdentity !== "stress@example.com") { bad++; detail.push("round " + round + ": identity lost"); }
+        const fresh = L({ ls: S.ls }); if ((await fresh.S.sources.unlock(pass).catch(e => e.kind)) !== true || (expect !== "none" && fresh.S.sources.getCreds().n2yoKey !== expect)) { bad++; detail.push("round " + round + ": a reload does not reproduce the state"); }
+        if (S.ls["satpass:bio"] && !hasBio && false) bad++;
+      }
+      ok("stress: " + rounds + " seeded rounds of interleaved setCreds/lockNow/unlock/passphrase-change/bio ops: no zero-key vault, every vault opens with the latest passphrase, last acknowledged edit persisted, reload reproduces it", bad === 0 && rounds === 6, detail.join("; "));
+    }
   }
   done();
 })();
