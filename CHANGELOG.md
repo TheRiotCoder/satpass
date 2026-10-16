@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 – credential vault
+- **Password managers:** all credential inputs are real `<form method="post" action="#">` fields with `name` + `autocomplete` (Space-Track `username`/`current-password`; tokens/keys `current-password` with a visually-hidden account label; passphrases `new-password`, `current-password` when unlocking). No `autocomplete="off"` on credentials. *Test connection*, *Save proxy settings* and the passphrase button are submit buttons with `preventDefault()` handlers; after a successful test the card re-renders so managers offer to save. Help text: "Save in your password manager; SatPass can store an encrypted copy on this device". CSP unchanged (`form-action 'none'`, `connect-src` as before); tests assert nothing secret reaches the URL, text or attributes.
+- **Biometric unlock (optional):** WebAuthn PRF. Platform passkey (rpId = page host, UV required) → PRF → HKDF-SHA256 → AES-GCM wrapping of the vault passphrase (record bound to rpId/credential/salt). New `js/biometric.js`; `Src.wrapSecret/unwrapSecret`. Passphrase is always the fallback; the vault format is unchanged (1.2.x blobs still open). Hidden when unsupported; PRF-less authenticators refused with a message. Record removed on passphrase change/removal and on Forget. Shared-origin caveats documented in README.
+- **Proxy first:** the proxy + Worker secrets route is section 1 of Setup → Data sources and the Space-Track entry points to it before the password fields; README lists it first.
+- **Auto-lock:** idle (default 15 min) and page-hidden (default 5 min) timers, configurable (0 = never); *Lock now*; lock wipes decrypted credentials + passphrase from memory and clears the fields. Pure rule `Src.lockDue`, store `lockNow()`.
+- **Encrypted backup:** export/import of a passphrase-encrypted credentials file (PBKDF2 600k → AES-GCM), proxy URL included, refused while locked, tamper/junk/size handling.
+- Tests: node 17 → 18 files (new `biometric.test.js`), new store/sources/shell checks; new `tests/browser-vault.js` (form structure, submit semantics, secret scan, auto-lock, backup through the UI, biometric flows on Chrome's virtual authenticator with PRF). **Not tested on a real device.**
+
 ## 1.2.2 – peer-review recheck
 - Fixed a 1 ms race between a category's `fetchedAt` and the source's `lastOk` (flaky "second manual refresh within the hour" test): one shared timestamp, and the hourly pull rule now remembers which categories the last pull covered instead of comparing timestamps (it also keeps working after a pull that found nothing newer).
 - After a tab close, session-only credentials are reported as "Credentials were session-only and need to be re-entered" instead of "No credentials stored".

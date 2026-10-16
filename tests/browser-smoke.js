@@ -374,6 +374,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
     }
   }
   await require('./browser-sources.js')({ ev, send, check, sleep, go, setVal, waitEvent, problems, consoleAll, LOCAL });
+  await require('./browser-vault.js')({ ev, send, check, sleep, go, setVal, waitEvent, problems, consoleAll, LOCAL, APP, HTTP });
   // ---- v1.2.1 UI checks
   await go('#/passes');
   await reloadAt('#/%E0%A4%A'); await sleep(1500);

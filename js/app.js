@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.2.2";
+  var DAY = 86400000, APP_VERSION = "1.3.0";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -103,11 +103,16 @@
   function dataSourcesCard() {
     var el = document.createElement("section"); el.className = "card"; el.id = "srcCard";
     var SS = S.sources, META = SS.META;
-    function pwField(id, label, key, ph, type) {
-      var dis = SS.isLocked() ? " disabled" : "";
-      return '<div class="field"><label for="' + id + '">' + label + '</label><div class="pwrow"><input class="inp" id="' + id + '"' + dis + ' type="' + (type || "password") + '" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="' + ph + '" value="' + esc(SS.getCreds()[key] || "") + '" data-key="' + key + '">' +
-        (type === "text" ? "" : '<button type="button" class="btn sm showpw" data-for="' + id + '" aria-pressed="false"' + dis + ">Show</button>") + "</div></div>";
+    // Credential inputs are real form fields (name + autocomplete) so iCloud Keychain / Google / 1Password / Bitwarden can save and fill them.
+    // type "text" = a user name (autocomplete=username); everything else is type=password with autocomplete=current-password (never "off").
+    function pwField(id, label, key, ph, type, name) {
+      var dis = SS.isLocked() ? " disabled" : "", user = type === "text";
+      return '<div class="field"><label for="' + id + '">' + label + '</label><div class="pwrow"><input class="inp" id="' + id + '" name="' + (name || (user ? "username" : "password")) + '"' + dis + ' type="' + (user ? "text" : "password") + '" autocomplete="' + (user ? "username" : "current-password") + '" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="' + ph + '" value="' + esc(SS.getCreds()[key] || "") + '" data-key="' + key + '">' +
+        (user ? "" : '<button type="button" class="btn sm showpw" data-for="' + id + '" aria-pressed="false"' + dis + ">Show</button>") + "</div></div>";
     }
+    // a visually-hidden (not display:none: managers ignore those) account label so a manager can file an API token under "<service> (SatPass)"
+    function acct(label) { return '<input class="sr-only" type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" value="' + esc(label) + '">'; }
+    function mins(opts, v) { return opts.map(function (o) { return '<option value="' + o + '"' + (o === v ? " selected" : "") + ">" + (o ? o + " min" : "Never") + "</option>"; }).join(""); }
     function when(t) { return new Date(t).toLocaleString() + " (" + F.age(Date.now() - t) + " ago)"; }
     function statusText(id) {
       var cfg = SS.config(), st = SS.status(id), rd = SS.readiness(id), out = [];
@@ -123,32 +128,54 @@
       return out.join(" ");
     }
     function render() {
-      var cfg = SS.config(), locked = SS.isLocked(), txi = S.txInfo();
+      var cfg = SS.config(), locked = SS.isLocked(), txi = S.txInfo(), vc = SS.vaultCfg();
       var rows = cfg.order.map(function (id, i) {
         var m = META[id], fields = "";
-        if (id === "spacetrack") fields = pwField("stId", "Space-Track user name (your account e-mail)", "stIdentity", "you@example.com", "text") + pwField("stPw", "Space-Track password", "stPassword", "password") +
-          '<div class="banner warn" id="stWarn">🔑 <b>Your Space-Track password is sensitive.</b> SatPass does not save it to local storage in plaintext: without a passphrase it is kept for this browser tab only (gone when you close it; note that a browser\'s session-restore may keep tab data); with a passphrase it is stored AES-GCM encrypted. This page shares its origin with every other project on the same GitHub account, so a script there could read anything stored in the clear. <b>Safer:</b> deploy the proxy with its secrets mode and use only the <i>Proxy access token</i> below – then your Space-Track password never enters this browser at all (<a class="link" href="https://github.com/TheRiotCoder/satpass/tree/main/proxy" target="_blank" rel="noopener">proxy/README</a>).</div>';
-        if (id === "satnogs") fields = pwField("snToken", "SatNOGS API token", "satnogsToken", "40 hex characters, from your db.satnogs.org profile");
-        if (id === "n2yo") fields = pwField("n2Key", "N2YO API key", "n2yoKey", "from your n2yo.com profile");
+        if (id === "spacetrack") fields = '<div class="banner good" id="stBest">🛡 <b>Best option for Space-Track: the proxy access token</b> (section 1 above). Put your Space-Track login in the Worker\'s secrets and your password never enters this browser at all (<a class="link" href="https://github.com/TheRiotCoder/satpass/tree/main/proxy" target="_blank" rel="noopener">proxy/README</a>).</div>' +
+          '<div class="banner warn" id="stWarn">🔑 <b>Your Space-Track password is sensitive.</b> If you enter it here anyway: save it in your password manager. SatPass does not save it to local storage in plaintext – without a passphrase it is kept for this browser tab only (gone when you close it; a browser\'s session-restore may keep tab data), with a passphrase it is stored AES-GCM encrypted. This page shares its origin with every other project on the same GitHub account, so a script there could read anything stored in the clear.</div>' +
+          pwField("stId", "Space-Track user name (your account e-mail)", "stIdentity", "you@example.com", "text") + pwField("stPw", "Space-Track password", "stPassword", "password", "password", "password");
+        if (id === "satnogs") fields = acct("SatNOGS API token (SatPass)") + pwField("snToken", "SatNOGS API token", "satnogsToken", "40 hex characters, from your db.satnogs.org profile", "password", "satnogs-token");
+        if (id === "n2yo") fields = acct("N2YO API key (SatPass)") + pwField("n2Key", "N2YO API key", "n2yoKey", "from your n2yo.com profile", "password", "n2yo-key");
         return '<div class="srcrow" data-id="' + id + '"><div class="srchead"><b>' + (i + 1) + ". " + esc(m.label) + "</b>" + (m.untested ? ' <span class="tag warn" title="' + esc(m.untested) + '">untested live</span>' : "") +
           '<label class="sw"><input type="checkbox" class="srcEn" data-id="' + id + '"' + (cfg.enabled[id] ? " checked" : "") + "> use</label>" +
           '<span class="grow"></span><button type="button" class="btn sm srcUp" data-id="' + id + '" aria-label="Move ' + esc(m.label) + ' up"' + (i === 0 ? " disabled" : "") + '>↑</button><button type="button" class="btn sm srcDn" data-id="' + id + '" aria-label="Move ' + esc(m.label) + ' down"' + (i === cfg.order.length - 1 ? " disabled" : "") + ">↓</button></div>" +
           (m.untested ? '<div class="note">⚠ ' + esc(m.untested) + "</div>" : "") +
-          '<div class="note srcStatus" data-id="' + id + '">' + esc(statusText(id)) + "</div>" + fields +
-          '<div class="actions"><button type="button" class="btn sm srcTest" data-id="' + id + '"' + (locked ? ' disabled title="Unlock your credentials first"' : "") + '>Test connection</button></div><div class="note srcTestMsg" data-id="' + id + '" aria-live="polite"></div>' +
+          '<div class="note srcStatus" data-id="' + id + '">' + esc(statusText(id)) + "</div>" +
+          '<form class="credForm" method="post" action="#" autocomplete="on" data-id="' + id + '">' + fields +
+          '<div class="actions"><button type="submit" class="btn sm srcTest" data-id="' + id + '"' + (locked ? ' disabled title="Unlock your credentials first"' : "") + '>Test connection</button></div></form><div class="note srcTestMsg" data-id="' + id + '" aria-live="polite"></div>' +
           '<details class="more"><summary>About ' + esc(m.label) + '</summary><p class="note">' + esc(m.limits) + '. <a class="link" href="' + esc(m.docs || m.site) + '" target="_blank" rel="noopener">Documentation</a></p></details></div>';
       }).join("");
       el.innerHTML = "<h2>Data sources</h2>" +
         '<p class="note">Element sets (TLE/GP) come from the first enabled source that answers. If a source fails (network, blocked, 403/429) SatPass tells you and tries the next one. CelesTrak is the default and needs nothing. <b>If you can\'t get any source working, you can always import a TLE/OMM file or paste TLEs on the Sats tab.</b></p>' +
+        '<h3>1 · Recommended: your own proxy with Worker secrets</h3>' +
+        '<div class="banner good" id="proxyBest">🛡 <b>Most secure route for Space-Track, SatNOGS and N2YO.</b> Deploy the small proxy to your own free Cloudflare account and store your service logins as <i>Worker secrets</i> there. Then SatPass only needs the proxy URL and a <b>proxy access token</b> – your Space-Track password never enters this browser. See <a class="link" href="https://github.com/TheRiotCoder/satpass/tree/main/proxy" target="_blank" rel="noopener">proxy/README</a>. Browsers cannot read these three services directly (they send no CORS headers), so a proxy is needed in any case; whoever runs it can see what you send, so use your own.</div>' +
+        '<form class="credForm" id="proxyForm" method="post" action="#" autocomplete="on">' + acct("SatPass proxy access token") +
+        '<div class="field"><label for="srcProxy">Proxy URL (your Cloudflare Worker, https only)</label><input class="inp" id="srcProxy" name="proxy-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://satpass-proxy.yourname.workers.dev" value="' + esc(cfg.proxy) + '"></div><div class="note" id="srcProxyMsg"></div>' +
+        pwField("srcProxyToken", "Proxy access token", "proxyToken", "from your Worker setup", "password", "proxy-token") +
+        '<div class="actions"><button type="submit" class="btn sm" id="proxySave">Save proxy settings</button></div><div class="note" id="proxyMsg" aria-live="polite"></div></form>' +
+        '<h3>2 · Sources, and (optional) logins typed into this browser</h3>' +
+        '<p class="note">Prefer the proxy above. If you do type a login or token here: <b>save it in your password manager</b> (iCloud Passwords / Keychain, Google Password Manager, 1Password, Bitwarden – these are standard login fields, so they can save and fill them), and SatPass can additionally keep an <b>encrypted copy on this device</b> (section 3).</p>' +
         rows +
-        '<h3>Proxy for Space-Track, SatNOGS and N2YO</h3>' +
-        '<div class="banner warn">Browsers are not allowed to read these three services directly (they send no CORS headers – checked from this page\'s own origin). They need a small proxy that <b>you</b> deploy to your own Cloudflare account (free): see <a class="link" href="https://github.com/TheRiotCoder/satpass/tree/main/proxy" target="_blank" rel="noopener">proxy/README</a>. Anything you type below is sent to <i>that proxy only</i>; whoever runs the proxy can see it, so use your own.</div>' +
-        '<div class="field"><label for="srcProxy">Proxy URL (your Cloudflare Worker, https only)</label><input class="inp" id="srcProxy" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://satpass-proxy.yourname.workers.dev" value="' + esc(cfg.proxy) + '"></div><div class="note" id="srcProxyMsg"></div>' +
-        pwField("srcProxyToken", "Proxy access token (recommended – lets the proxy hold your service credentials as Worker secrets)", "proxyToken", "optional") +
-        '<h3>Credentials on this device</h3>' +
+        '<h3>3 · Credentials on this device</h3>' +
+        '<p class="note" id="credHelp"><b>Save in your password manager; SatPass can store an encrypted copy on this device</b> (passphrase-encrypted, optionally unlocked with Face ID / fingerprint). Credentials are never put in a URL.</p>' +
         '<p class="note" id="credNote"></p><div id="legacyBox"></div>' +
-        '<div class="field"><label for="passIn">Passphrase – <b>required to keep credentials across sessions</b> (AES-GCM, PBKDF2 600k)</label><div class="pwrow"><input class="inp" id="passIn" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="' + 'at least ' + SS.minPassphrase + ' characters' + '"><button type="button" class="btn sm showpw" data-for="passIn" aria-pressed="false">Show</button></div></div>' +
-        '<div class="actions"><button type="button" class="btn sm" id="passLock">' + (locked ? "Unlock" : "Encrypt &amp; keep with passphrase") + '</button>' + (SS.hasPassphrase() && !locked ? '<button type="button" class="btn sm" id="passRemove">Remove passphrase</button>' : "") + '<button type="button" class="btn sm danger" id="forgetCreds">Forget credentials</button></div><div class="note" id="passMsg" aria-live="polite"></div>' +
+        '<form class="credForm" id="passForm" method="post" action="#" autocomplete="on">' + acct("SatPass vault passphrase") +
+        '<div class="field"><label for="passIn">Passphrase – <b>required to keep credentials across sessions</b> (AES-GCM, PBKDF2 600k)</label><div class="pwrow"><input class="inp" id="passIn" name="vault-passphrase" type="password" autocomplete="' + (locked ? "current-password" : "new-password") + '" autocapitalize="off" spellcheck="false" placeholder="' + 'at least ' + SS.minPassphrase + ' characters' + '"><button type="button" class="btn sm showpw" data-for="passIn" aria-pressed="false">Show</button></div></div>' +
+        '<div class="actions"><button type="submit" class="btn sm" id="passLock">' + (locked ? "Unlock" : "Encrypt &amp; keep with passphrase") + '</button><span id="bioUnlockSlot"></span>' + (SS.hasPassphrase() && !locked ? '<button type="button" class="btn sm" id="passRemove">Remove passphrase</button><button type="button" class="btn sm" id="lockNow">Lock now</button>' : "") + '<button type="button" class="btn sm danger" id="forgetCreds">Forget credentials</button></div></form><div class="note" id="passMsg" aria-live="polite"></div>' +
+        '<div id="bioBox"></div>' +
+        '<details class="more" id="lockBox"' + (SS.credMode() === "encrypted" || locked ? " open" : "") + '><summary>Auto-lock</summary>' +
+        '<p class="note">An encrypted vault locks itself and forgets the decrypted credentials (and the passphrase) held in memory. While locked, fields are disabled and automatic refreshes skip the services that need a login. Credentials kept for this tab only (no passphrase) cannot be locked – they would be lost – so they simply disappear when the tab closes.</p>' +
+        '<div class="field"><label for="lockIdle">Lock after no activity for</label><select class="inp" id="lockIdle">' + mins([0, 1, 5, 15, 30, 60], vc.idleMin) + '</select></div>' +
+        '<div class="field"><label for="lockHidden">Lock when SatPass is hidden or in the background for</label><select class="inp" id="lockHidden">' + mins([0, 1, 5, 15, 30], vc.hiddenMin) + '</select></div></details>' +
+        '<details class="more" id="backupBox"><summary>Encrypted backup (move credentials to another device)</summary>' +
+        '<p class="note">The file is encrypted with its own passphrase (≥ ' + SS.minPassphrase + ' characters, PBKDF2 600k → AES-GCM); it contains no plaintext. It also carries your proxy URL. Keep it somewhere you trust and the passphrase in your password manager.</p>' +
+        '<form class="credForm" id="bkExportForm" method="post" action="#" autocomplete="on">' + acct("SatPass credentials backup") +
+        '<div class="field"><label for="bkPass">Backup passphrase</label><input class="inp" id="bkPass" name="backup-passphrase" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="at least ' + SS.minPassphrase + ' characters"' + (locked ? " disabled" : "") + '></div>' +
+        '<div class="actions"><button type="submit" class="btn sm" id="bkExport"' + (locked ? ' disabled title="Unlock first"' : "") + '>Export encrypted backup</button></div></form>' +
+        '<form class="credForm" id="bkImportForm" method="post" action="#" autocomplete="on">' + acct("SatPass credentials backup (import)") +
+        '<div class="field"><label for="bkFile">Backup file</label><input class="inp" id="bkFile" name="backup-file" type="file" accept=".json,.satpass-creds,application/json"' + (locked ? " disabled" : "") + '></div>' +
+        '<div class="field"><label for="bkPass2">Backup passphrase</label><input class="inp" id="bkPass2" name="backup-passphrase-import" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false"' + (locked ? " disabled" : "") + '></div>' +
+        '<div class="actions"><button type="submit" class="btn sm" id="bkImport"' + (locked ? ' disabled title="Unlock first"' : "") + '>Import backup</button></div></form><div class="note" id="bkMsg" aria-live="polite"></div></details>' +
         '<h3>SatNOGS live transmitters (optional)</h3>' +
         '<p class="note">Adds SatNOGS DB transmitters (active, alive only) to the Doppler tab <i>below</i> the bundled table. The bundled nominal frequencies stay the default and are never overwritten.' + (txi ? " Currently stored: " + txi.satellites + " satellites, fetched " + when(txi.fetchedAt) + "." : "") + '</p>' +
         '<div class="actions"><button type="button" class="btn sm" id="txFetch">Fetch live transmitters from SatNOGS</button>' + (txi ? '<button type="button" class="btn sm" id="txClear">Remove live transmitters</button>' : "") + '</div><div class="note" id="txMsg" aria-live="polite"></div><div id="txReport"></div>' +
@@ -168,6 +195,30 @@
       var pm = $("#srcProxyMsg", el), v = Src.validateProxyUrl(SS.config().proxy), px = SS.config().proxy;
       pm.textContent = !px ? "" : !v.ok ? "⚠ " + v.reason : !Src.proxyAllowedByCsp(px) ? "⚠ This page's Content-Security-Policy only allows proxies on https://*.workers.dev. To use another host (or http://localhost for local development) add it to connect-src in index.html – see the README." : "";
     }
+    // Biometric unlock (WebAuthn PRF): shown only where the browser can plausibly do it (HTTPS, platform authenticator, real host name).
+    function bioWire() {
+      var box = $("#bioBox", el), slot = $("#bioUnlockSlot", el), info = SS.bioInfo(), locked = SS.isLocked();
+      if (!window.SatBio) return;
+      SatBio.supported().then(function (sup) {
+        if (!document.body.contains(box) || !sup.ok && !info) return;   // (the card may have been re-rendered while we asked)
+        function msg(t) { var m = $("#passMsg", el); if (m) m.textContent = t; }
+        if (locked && info && sup.ok) {
+          slot.innerHTML = '<button type="button" class="btn sm primary" id="bioUnlock">🔓 Unlock with biometrics</button>';
+          $("#bioUnlock", el).onclick = function () { msg("Waiting for Face ID / fingerprint…"); SS.bioUnlock(function (rec) { return SatBio.assertPrf(rec); }).then(function () { render(); $("#passMsg", el).textContent = "Unlocked."; }, function (e) { msg("✖ " + e.message + " You can still use your passphrase."); }); };
+        } else if (!locked && SS.credMode() === "encrypted") {
+          if (info) {
+            box.innerHTML = '<p class="note" id="bioOn">🔐 <b>Biometric unlock is on</b> for this device (set up ' + esc(new Date(info.created).toLocaleDateString()) + '). The passphrase still works and is your recovery.</p><div class="actions"><button type="button" class="btn sm" id="bioRemove">Turn off biometric unlock</button></div>';
+            $("#bioRemove", el).onclick = function () { var rec = S.load("bio", null); SS.bioRemove(); (window.SatBio ? SatBio.forget(rec) : Promise.resolve()).then(function () { render(); $("#passMsg", el).textContent = "Biometric unlock turned off (you can also delete the “SatPass vault unlock” passkey in your device\'s passkey settings)."; }); };
+          } else if (sup.ok) {
+            box.innerHTML = '<p class="note" id="bioHelp"><b>Unlock with biometrics (optional).</b> Uses a passkey on this device (Face ID, Touch ID, Android fingerprint, Windows Hello) to open the encrypted copy without typing the passphrase. Needs a browser with the WebAuthn PRF extension (iOS/iPadOS 18+, Android Chrome, desktop Chrome/Edge/Safari). The passphrase always remains the fallback. The passkey is created for this site\'s host, which is shared with other apps on the same GitHub Pages account – it is labelled “SatPass vault unlock (not a login)”, holds no account, and only protects an encrypted record that lives in this browser.</p><div class="actions"><button type="button" class="btn sm" id="bioEnable">Enable biometric unlock</button></div>';
+            $("#bioEnable", el).onclick = function () {
+              msg("Waiting for Face ID / fingerprint…");
+              SatBio.enroll().then(function (r) { return SS.bioSave({ credId: r.credId, prfSalt: r.prfSalt, rpId: r.rpId }, r.prf); }).then(function () { render(); $("#passMsg", el).textContent = "✔ Biometric unlock enabled. Lock now and try it."; }, function (e) { msg("✖ " + e.message); });
+            };
+          }
+        }
+      });
+    }
     function wire() {
       refreshStatus();
       $$(".showpw", el).forEach(function (b) { b.onclick = function () { var i = document.getElementById(b.dataset.for), show = i.type === "password"; i.type = show ? "text" : "password"; b.textContent = show ? "Hide" : "Show"; b.setAttribute("aria-pressed", String(show)); }; });
@@ -177,22 +228,56 @@
       function move(id, d) { var o = SS.config().order.slice(), i = o.indexOf(id), j = i + d; if (j < 0 || j >= o.length) return; o.splice(i, 1); o.splice(j, 0, id); SS.setConfig({ order: o }); render(); var b = $((d < 0 ? ".srcUp" : ".srcDn") + '[data-id="' + id + '"]', el); if (b && !b.disabled) b.focus(); }
       $$(".srcUp", el).forEach(function (b) { b.onclick = function () { move(b.dataset.id, -1); }; });
       $$(".srcDn", el).forEach(function (b) { b.onclick = function () { move(b.dataset.id, 1); }; });
-      $$(".srcTest", el).forEach(function (b) {
-        b.onclick = function () {
-          var id = b.dataset.id, out = $('.srcTestMsg[data-id="' + id + '"]', el);
+      // "Test connection" is the form's submit button: a real submit event (preventDefault) is what password managers watch to offer saving the login.
+      // After a SUCCESSFUL test the card is re-rendered (the old form disappears) which is the other signal managers use; a failed test keeps the form so a wrong password is not offered for saving.
+      $$("form.credForm[data-id]", el).forEach(function (f) {
+        f.onsubmit = function (ev) {
+          ev.preventDefault();
+          var b = $(".srcTest", f), id = f.dataset.id, out = $('.srcTestMsg[data-id="' + id + '"]', el);
           if (SS.isLocked()) { out.textContent = "🔒 Unlock your credentials first (nothing was changed)."; return; }
           var patch = {}; $$("input[data-key]", el).forEach(function (i) { patch[i.dataset.key] = i.value; });   // test what is typed
           SS.setConfig({ proxy: $("#srcProxy", el).value });
           b.disabled = true; out.textContent = "Testing…";
-          SS.setCreds(patch).then(function () { return SS.test(id); }, function (e) { return { ok: false, message: e.message }; }).then(function (r) { out.textContent = (r.ok ? "✔ " : "✖ ") + r.message; out.className = "note srcTestMsg " + (r.ok ? "okmsg" : "badmsg"); }).then(function () { b.disabled = false; refreshStatus(); });
+          SS.setCreds(patch).then(function () { return SS.test(id); }, function (e) { return { ok: false, message: e.message }; }).then(function (r) {
+            var txt = (r.ok ? "✔ " : "✖ ") + r.message, cls = "note srcTestMsg " + (r.ok ? "okmsg" : "badmsg");
+            if (r.ok) { render(); out = $('.srcTestMsg[data-id="' + id + '"]', el); } else { b.disabled = false; refreshStatus(); }
+            out.textContent = txt; out.className = cls;
+          });
         };
       });
-      $("#passLock", el).onclick = function () {
+      $("#proxyForm", el).onsubmit = function (ev) {
+        ev.preventDefault(); var m = $("#proxyMsg", el);
+        if (SS.isLocked()) { m.textContent = "🔒 Unlock your credentials first (nothing was changed)."; return; }
+        SS.setConfig({ proxy: $("#srcProxy", el).value });
+        SS.setCreds({ proxyToken: $("#srcProxyToken", el).value }).then(function () { render(); $("#proxyMsg", el).textContent = "✔ Saved. Use “Test connection” on a source below to check the proxy."; }, function (e) { m.textContent = e.message; });
+      };
+      $("#passForm", el).onsubmit = function (ev) {
+        ev.preventDefault();
         var pw = $("#passIn", el).value, m = $("#passMsg", el);
         (SS.isLocked() ? SS.unlock(pw) : SS.lock(pw)).then(function () { m.textContent = SS.hasPassphrase() ? "Done – credentials are encrypted on this device." : "Done."; $("#passIn", el).value = ""; render(); }, function (e) { m.textContent = e && (e.kind === "config" || e.kind === "storage" || e.kind === "locked") ? e.message : "Wrong passphrase or unreadable data."; });
       };
       var pr = $("#passRemove", el); if (pr) pr.onclick = function () { SS.removePassphrase().then(function () { $("#passMsg", el).textContent = "Passphrase removed – the encrypted copy was deleted; credentials now stay in this tab only (nothing is saved to local storage)."; render(); }); };
       $("#forgetCreds", el).onclick = function () { if (!confirm("Delete all stored Space-Track / SatNOGS / N2YO credentials and the proxy access token from this browser?")) return; SS.forgetCreds(); render(); $("#passMsg", el).textContent = "All credentials were deleted from this device."; };
+      var ln = $("#lockNow", el); if (ln) ln.onclick = function () { if (SS.lockNow()) { render(); $("#passMsg", el).textContent = "🔒 Locked – decrypted credentials were cleared from memory."; } };
+      $("#lockIdle", el).onchange = function () { SS.setVaultCfg({ idleMin: this.value }); };
+      $("#lockHidden", el).onchange = function () { SS.setVaultCfg({ hiddenMin: this.value }); };
+      bioWire();
+      $("#bkExportForm", el).onsubmit = function (ev) {
+        ev.preventDefault(); var m = $("#bkMsg", el), pw = $("#bkPass", el).value;
+        SS.exportBackup(pw).then(function (text) {
+          var blob = new Blob([text], { type: "application/json" }), url = URL.createObjectURL(blob), a = document.createElement("a");
+          a.href = url; a.download = "satpass-credentials-" + new Date().toISOString().slice(0, 10) + ".satpass-creds.json"; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+          $("#bkPass", el).value = ""; m.textContent = "✔ Backup file created (encrypted). Keep the passphrase safe – it cannot be recovered.";
+        }, function (e) { m.textContent = "✖ " + e.message; });
+      };
+      $("#bkImportForm", el).onsubmit = function (ev) {
+        ev.preventDefault(); var m = $("#bkMsg", el), f = $("#bkFile", el).files && $("#bkFile", el).files[0], pw = $("#bkPass2", el).value;
+        if (!f) { m.textContent = "✖ Choose a backup file first."; return; }
+        if (f.size > 100000) { m.textContent = "✖ That file is too large to be a SatPass backup."; return; }
+        f.text().then(function (text) { return SS.importBackup(text, pw); }).then(function (r) {
+          render(); $("#bkMsg", el).textContent = "✔ Imported " + r.imported + " credential value(s)" + (r.proxy ? " and the proxy URL" : "") + (SS.hasPassphrase() ? " (stored encrypted on this device)." : " (kept for this tab only – set a passphrase in section 3 to keep them).");
+        }, function (e) { m.textContent = "✖ " + e.message; });
+      };
       $("#txFetch", el).onclick = function () {
         var b = this, m = $("#txMsg", el); m.textContent = "Fetching…"; b.disabled = true;
         S.fetchTransmitters().then(function (r) {
@@ -203,6 +288,9 @@
       };
       var tc = $("#txClear", el); if (tc) tc.onclick = function () { S.clearLiveTx(); render(); };
     }
+    el.rerender = render;
+    var lastLocked = SS.isLocked();   // the vault locking (auto-lock, Lock now, another code path) must always clear the decrypted values out of the fields
+    S.onChange(function () { if (!document.body.contains(el)) return; if (SS.isLocked() !== lastLocked) { lastLocked = SS.isLocked(); render(); } });
     render();
     return el;
   }
@@ -942,6 +1030,23 @@
     window.addEventListener("resize", function () { if (view.resize) view.resize(); });
     window.addEventListener("online", autoRefresh);
     route(); install.init(); refreshNextBar();
+    // Auto-lock (1.3.0): an encrypted vault forgets its decrypted credentials after idle time / while the page is hidden.
+    (function () {
+      var lastActive = Date.now(), hiddenSince = document.hidden ? Date.now() : null;
+      ["pointerdown", "keydown", "touchstart", "wheel", "scroll", "input"].forEach(function (ev) { window.addEventListener(ev, function () { lastActive = Date.now(); }, { passive: true, capture: true }); });
+      function tick(now) {
+        now = now || Date.now();
+        var why = Src.lockDue(S.sources.vaultCfg(), { now: now, lastActive: lastActive, hiddenSince: hiddenSince });
+        if (why && S.sources.lockNow()) {
+          var c = document.getElementById("srcCard"); if (c && c.rerender) c.rerender();
+          toast(why === "hidden" ? "🔒 Credentials locked (SatPass was in the background)." : "🔒 Credentials locked (no activity).", 5000);
+        }
+        return why;
+      }
+      document.addEventListener("visibilitychange", function () { if (document.hidden) hiddenSince = Date.now(); else { tick(); hiddenSince = null; lastActive = Date.now(); } });
+      setInterval(tick, 10000);
+      window.SatPassAutoLock = { tick: tick, touch: function (t) { lastActive = t; }, hide: function (t) { hiddenSince = t; } };   // small hook for the browser tests
+    })();
     setInterval(function () { updateNextBar(); checkReminders(); }, 1000);
     setTimeout(function () { S.ensureAll(); }, 1200);   // lazy category snapshots: load in the background once the first view is up (precached, so this also works offline)
     setTimeout(autoRefresh, 2500);

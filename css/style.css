@@ -141,3 +141,4 @@ table.radar tr+tr th,table.radar tr+tr td{border-top:1px solid var(--line)}
 tr.mine{background:var(--goodbg)}
 table.cmp td{vertical-align:top}
 #srcCard h3{margin:16px 0 6px;font-size:1rem}
+.sr-only{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;opacity:0}
