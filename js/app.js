@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.2.0";
+  var DAY = 86400000, APP_VERSION = "1.2.1";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -62,6 +62,11 @@
     return (passCache[n] ? passCache[n].passes : []).filter(function (p) { return p.los > now && p.aos <= lim; });
   }
   S.onChange(function () { satCache = {}; });
+  var lastFailToast = 0;
+  S.onSaveFail(function (f) {   // storage quota / blocked: tell the user once a minute instead of failing silently
+    var now = Date.now(); if (now - lastFailToast < 60e3) return; lastFailToast = now;
+    toast("⚠ Couldn't save to this browser (" + (f && f.quota ? "storage is full" : "storage blocked") + "; " + (f && f.key || "data") + "). Recent changes may be lost when you close the app.", 7000);
+  });
 
   /* ---------- views infrastructure ---------- */
   var view = { token: 0, timers: [], tick: null, resize: null };
@@ -71,13 +76,15 @@
   function setTitle(t) { titleEl.textContent = t; document.title = t === "SatPass" ? "SatPass – Satellite & ISS Pass Predictor" : t + " – SatPass"; }
   function contentWidth() { return Math.max(240, (main.clientWidth || 360) - 28); }
 
+  // a malformed percent escape in the URL hash (e.g. #/%E0%A4%A) used to throw URIError here and abort boot (the service worker was never registered)
+  function safeDecode(x) { try { return decodeURIComponent(x); } catch (e) { return ""; } }
   var ROUTES = {};
   // Re-render the current view in place (e.g. after a select changed). Must go through here, never invoke a view function directly:
   // that would leave the previous render's 1 s / 30 s timers running and they would keep overwriting the new DOM with stale state.
   function rerender(name, a) { clearView(); ROUTES[name](a); }
   function route() {
     clearView();
-    var h = (location.hash || "#/").replace(/^#\/?/, ""), parts = h.split("?")[0].split("/").map(decodeURIComponent), name = parts[0] || (S.hasLocation() ? "passes" : "passes");
+    var h = (location.hash || "#/").replace(/^#\/?/, ""), parts = h.split("?")[0].split("/").map(safeDecode), name = parts[0] || "passes";
     var fn = ROUTES[name] || ROUTES.passes;
     // deep link / favourite to a satellite that lives in a lazily loaded category snapshot: load them first, then render
     var wanted = parts.slice(1).map(Number).filter(function (x) { return x > 1000 && x < 400000; });
@@ -97,8 +104,9 @@
     var el = document.createElement("section"); el.className = "card"; el.id = "srcCard";
     var SS = S.sources, META = SS.META;
     function pwField(id, label, key, ph, type) {
-      return '<div class="field"><label for="' + id + '">' + label + '</label><div class="pwrow"><input class="inp" id="' + id + '" type="' + (type || "password") + '" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="' + ph + '" value="' + esc(SS.getCreds()[key] || "") + '" data-key="' + key + '">' +
-        (type === "text" ? "" : '<button type="button" class="btn sm showpw" data-for="' + id + '" aria-pressed="false">Show</button>') + "</div></div>";
+      var dis = SS.isLocked() ? " disabled" : "";
+      return '<div class="field"><label for="' + id + '">' + label + '</label><div class="pwrow"><input class="inp" id="' + id + '"' + dis + ' type="' + (type || "password") + '" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="' + ph + '" value="' + esc(SS.getCreds()[key] || "") + '" data-key="' + key + '">' +
+        (type === "text" ? "" : '<button type="button" class="btn sm showpw" data-for="' + id + '" aria-pressed="false"' + dis + ">Show</button>") + "</div></div>";
     }
     function when(t) { return new Date(t).toLocaleString() + " (" + F.age(Date.now() - t) + " ago)"; }
     function statusText(id) {
@@ -118,14 +126,16 @@
       var cfg = SS.config(), locked = SS.isLocked(), txi = S.txInfo();
       var rows = cfg.order.map(function (id, i) {
         var m = META[id], fields = "";
-        if (id === "spacetrack") fields = pwField("stId", "Space-Track user name (your account e-mail)", "stIdentity", "you@example.com", "text") + pwField("stPw", "Space-Track password", "stPassword", "password");
+        if (id === "spacetrack") fields = pwField("stId", "Space-Track user name (your account e-mail)", "stIdentity", "you@example.com", "text") + pwField("stPw", "Space-Track password", "stPassword", "password") +
+          '<div class="banner warn" id="stWarn">🔑 <b>Your Space-Track password is sensitive.</b> SatPass never writes it to disk in plaintext: without a passphrase it is kept for this browser tab only (gone when you close it); with a passphrase it is stored AES-GCM encrypted. This page shares its origin with every other project on the same GitHub account, so a script there could read anything stored in the clear. <b>Safer:</b> deploy the proxy with its secrets mode and use only the <i>Proxy access token</i> below – then your Space-Track password never enters this browser at all (<a class="link" href="https://github.com/TheRiotCoder/satpass/tree/main/proxy" target="_blank" rel="noopener">proxy/README</a>).</div>';
         if (id === "satnogs") fields = pwField("snToken", "SatNOGS API token", "satnogsToken", "40 hex characters, from your db.satnogs.org profile");
         if (id === "n2yo") fields = pwField("n2Key", "N2YO API key", "n2yoKey", "from your n2yo.com profile");
-        return '<div class="srcrow" data-id="' + id + '"><div class="srchead"><b>' + (i + 1) + ". " + esc(m.label) + "</b>" +
+        return '<div class="srcrow" data-id="' + id + '"><div class="srchead"><b>' + (i + 1) + ". " + esc(m.label) + "</b>" + (m.untested ? ' <span class="tag warn" title="' + esc(m.untested) + '">untested live</span>' : "") +
           '<label class="sw"><input type="checkbox" class="srcEn" data-id="' + id + '"' + (cfg.enabled[id] ? " checked" : "") + "> use</label>" +
           '<span class="grow"></span><button type="button" class="btn sm srcUp" data-id="' + id + '" aria-label="Move ' + esc(m.label) + ' up"' + (i === 0 ? " disabled" : "") + '>↑</button><button type="button" class="btn sm srcDn" data-id="' + id + '" aria-label="Move ' + esc(m.label) + ' down"' + (i === cfg.order.length - 1 ? " disabled" : "") + ">↓</button></div>" +
+          (m.untested ? '<div class="note">⚠ ' + esc(m.untested) + "</div>" : "") +
           '<div class="note srcStatus" data-id="' + id + '">' + esc(statusText(id)) + "</div>" + fields +
-          '<div class="actions"><button type="button" class="btn sm srcTest" data-id="' + id + '">Test connection</button></div><div class="note srcTestMsg" data-id="' + id + '" aria-live="polite"></div>' +
+          '<div class="actions"><button type="button" class="btn sm srcTest" data-id="' + id + '"' + (locked ? ' disabled title="Unlock your credentials first"' : "") + '>Test connection</button></div><div class="note srcTestMsg" data-id="' + id + '" aria-live="polite"></div>' +
           '<details class="more"><summary>About ' + esc(m.label) + '</summary><p class="note">' + esc(m.limits) + '. <a class="link" href="' + esc(m.docs || m.site) + '" target="_blank" rel="noopener">Documentation</a></p></details></div>';
       }).join("");
       el.innerHTML = "<h2>Data sources</h2>" +
@@ -136,14 +146,14 @@
         '<div class="field"><label for="srcProxy">Proxy URL (your Cloudflare Worker, https only)</label><input class="inp" id="srcProxy" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://satpass-proxy.yourname.workers.dev" value="' + esc(cfg.proxy) + '"></div><div class="note" id="srcProxyMsg"></div>' +
         pwField("srcProxyToken", "Proxy access token (recommended – lets the proxy hold your service credentials as Worker secrets)", "proxyToken", "optional") +
         '<h3>Credentials on this device</h3>' +
-        '<p class="note" id="credNote"></p>' +
-        '<div class="field"><label for="passIn">Passphrase (optional, encrypts the stored credentials with AES-GCM)</label><div class="pwrow"><input class="inp" id="passIn" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="at least 6 characters"><button type="button" class="btn sm showpw" data-for="passIn" aria-pressed="false">Show</button></div></div>' +
-        '<div class="actions"><button type="button" class="btn sm" id="passLock">' + (locked ? "Unlock" : "Encrypt with passphrase") + '</button>' + (SS.hasPassphrase() && !locked ? '<button type="button" class="btn sm" id="passRemove">Remove passphrase</button>' : "") + '<button type="button" class="btn sm danger" id="forgetCreds">Forget credentials</button></div><div class="note" id="passMsg" aria-live="polite"></div>' +
+        '<p class="note" id="credNote"></p><div id="legacyBox"></div>' +
+        '<div class="field"><label for="passIn">Passphrase – <b>required to keep credentials across sessions</b> (AES-GCM, PBKDF2 600k)</label><div class="pwrow"><input class="inp" id="passIn" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="' + 'at least ' + SS.minPassphrase + ' characters' + '"><button type="button" class="btn sm showpw" data-for="passIn" aria-pressed="false">Show</button></div></div>' +
+        '<div class="actions"><button type="button" class="btn sm" id="passLock">' + (locked ? "Unlock" : "Encrypt &amp; keep with passphrase") + '</button>' + (SS.hasPassphrase() && !locked ? '<button type="button" class="btn sm" id="passRemove">Remove passphrase</button>' : "") + '<button type="button" class="btn sm danger" id="forgetCreds">Forget credentials</button></div><div class="note" id="passMsg" aria-live="polite"></div>' +
         '<h3>SatNOGS live transmitters (optional)</h3>' +
         '<p class="note">Adds SatNOGS DB transmitters (active, alive only) to the Doppler tab <i>below</i> the bundled table. The bundled nominal frequencies stay the default and are never overwritten.' + (txi ? " Currently stored: " + txi.satellites + " satellites, fetched " + when(txi.fetchedAt) + "." : "") + '</p>' +
         '<div class="actions"><button type="button" class="btn sm" id="txFetch">Fetch live transmitters from SatNOGS</button>' + (txi ? '<button type="button" class="btn sm" id="txClear">Remove live transmitters</button>' : "") + '</div><div class="note" id="txMsg" aria-live="polite"></div><div id="txReport"></div>' +
         '<details class="more" id="srcPrivacy"><summary>Privacy &amp; rate limits</summary>' +
-        '<p class="note"><b>Privacy.</b> Credentials are stored only in this browser\'s localStorage on this device – <b>unencrypted</b> unless you set a passphrase above (then AES-GCM encrypted; you re-enter the passphrase each session). They are sent only to your own proxy, in request headers (never in URLs, never cached by the service worker, never written to logs or exported .ics files), and the proxy forwards them only to the matching service. SatPass has no server and no analytics. Anyone with access to this browser profile can read unencrypted credentials; a passphrase does not protect against malicious browser extensions or a compromised device. “Forget credentials” deletes them.</p>' +
+        '<p class="note"><b>Privacy.</b> Credentials are <b>never stored unencrypted on disk</b>. Without a passphrase they live in this tab (sessionStorage/memory) and disappear when it closes; with a passphrase they are stored AES-GCM encrypted in this browser\'s localStorage (you re-enter the passphrase each session). This origin is shared with every other project on the same GitHub Pages account, so keeping secrets out of the clear matters; the proxy access-token mode keeps your Space-Track password out of the browser entirely. They are sent only to your own proxy, in request headers (never in URLs, never cached by the service worker, never written to logs or exported .ics files), and the proxy forwards them only to the matching service. SatPass has no server and no analytics. Anyone using this browser tab can read session credentials; a passphrase does not protect against malicious browser extensions or a compromised device. “Forget credentials” deletes them.</p>' +
         '<p class="note"><b>Rate limits.</b> Space-Track: under 30 requests/minute and 300/hour, and the same GP query at most once an hour – SatPass batches NORAD ids, never asks for the same set more than hourly and stops at 25/min. SatNOGS DB: 60/hour anonymous, 240/hour with a token – SatPass allows itself 40/hour. N2YO free key: 1000/hour for TLE, 100/hour for radio/visual passes, 100/hour for “above” – SatPass allows itself 900 and 90. After any failure SatPass waits (30 min, then longer) before trying that source again automatically; wrong credentials stop automatic use altogether so your account is never hammered.</p>' +
         '<p class="note"><b>Terms.</b> Space-Track data is for your own use and may not be redistributed (<a class="link" href="https://www.space-track.org/documentation#/user_agree" target="_blank" rel="noopener">user agreement</a>); SatPass keeps it only in this browser. SatNOGS DB data is CC-BY-SA; N2YO data is subject to the <a class="link" href="https://www.n2yo.com/api/" target="_blank" rel="noopener">N2YO API terms</a>.</p></details>';
       wire();
@@ -151,14 +161,17 @@
     function refreshStatus() {
       $$(".srcStatus", el).forEach(function (n) { n.textContent = statusText(n.dataset.id); });
       var locked = SS.isLocked();
-      $("#credNote", el).textContent = locked ? "🔒 Stored credentials are encrypted – enter your passphrase and press Unlock." : SS.hasPassphrase() ? "🔐 Stored credentials are encrypted with your passphrase (unlocked for this session)." : "Stored unencrypted in this browser only (localStorage on this device).";
+      var cm = SS.credMode();
+      $("#credNote", el).textContent = locked ? "🔒 Stored credentials are encrypted – enter your passphrase and press Unlock. Fields and Test are disabled until then so nothing can overwrite them." : cm === "encrypted" ? "🔐 Stored credentials are encrypted with your passphrase (unlocked for this session)." : cm === "legacy-plain" ? "⚠ Credentials saved by SatPass 1.2.0 are still stored in plaintext in this browser." : cm === "session" ? "🧠 Kept for this browser tab only (not written to disk). They are gone when you close the tab – set a passphrase below to keep them." : "No credentials stored.";
+      $("#legacyBox", el).innerHTML = cm === "legacy-plain" ? '<div class="banner warn">⚠️ Version 1.2.0 saved your credentials <b>unencrypted</b> in this browser, where any script from this site\'s origin could read them. Encrypt them with a passphrase below (recommended), or <button type="button" class="btn sm" id="dropPlain">remove the plaintext copy (keep them for this tab only)</button></div>' : "";
+      var dp = $("#dropPlain", el); if (dp) dp.onclick = function () { SS.dropPlaintextCopy().then(function () { toast("Plaintext copy removed – credentials now live in this tab only."); render(); }, function (e) { toast(e.message); }); };
       var pm = $("#srcProxyMsg", el), v = Src.validateProxyUrl(SS.config().proxy), px = SS.config().proxy;
-      pm.textContent = !px ? "" : !v.ok ? "⚠ " + v.reason : !Src.proxyAllowedByCsp(px) ? "⚠ This page's Content-Security-Policy only allows proxies on *.workers.dev (and localhost). Edit index.html to allow another host." : "";
+      pm.textContent = !px ? "" : !v.ok ? "⚠ " + v.reason : !Src.proxyAllowedByCsp(px) ? "⚠ This page's Content-Security-Policy only allows proxies on https://*.workers.dev. To use another host (or http://localhost for local development) add it to connect-src in index.html – see the README." : "";
     }
     function wire() {
       refreshStatus();
       $$(".showpw", el).forEach(function (b) { b.onclick = function () { var i = document.getElementById(b.dataset.for), show = i.type === "password"; i.type = show ? "text" : "password"; b.textContent = show ? "Hide" : "Show"; b.setAttribute("aria-pressed", String(show)); }; });
-      $$("input[data-key]", el).forEach(function (i) { i.onchange = function () { var patch = {}; patch[i.dataset.key] = i.value; SS.setCreds(patch); refreshStatus(); }; });
+      $$("input[data-key]", el).forEach(function (i) { i.onchange = function () { var patch = {}; patch[i.dataset.key] = i.value; SS.setCreds(patch).then(function () { refreshStatus(); }, function (e) { toast(e.message); }); }; });
       $("#srcProxy", el).onchange = function () { SS.setConfig({ proxy: this.value }); this.value = SS.config().proxy; refreshStatus(); };
       $$(".srcEn", el).forEach(function (c) { c.onchange = function () { var p = {}; p[c.dataset.id] = c.checked; SS.setConfig({ enabled: p }); refreshStatus(); }; });
       function move(id, d) { var o = SS.config().order.slice(), i = o.indexOf(id), j = i + d; if (j < 0 || j >= o.length) return; o.splice(i, 1); o.splice(j, 0, id); SS.setConfig({ order: o }); render(); var b = $((d < 0 ? ".srcUp" : ".srcDn") + '[data-id="' + id + '"]', el); if (b && !b.disabled) b.focus(); }
@@ -167,17 +180,18 @@
       $$(".srcTest", el).forEach(function (b) {
         b.onclick = function () {
           var id = b.dataset.id, out = $('.srcTestMsg[data-id="' + id + '"]', el);
-          $$("input[data-key]", el).forEach(function (i) { var p = {}; p[i.dataset.key] = i.value; SS.setCreds(p); });   // test what is typed
+          if (SS.isLocked()) { out.textContent = "🔒 Unlock your credentials first (nothing was changed)."; return; }
+          var patch = {}; $$("input[data-key]", el).forEach(function (i) { patch[i.dataset.key] = i.value; });   // test what is typed
           SS.setConfig({ proxy: $("#srcProxy", el).value });
           b.disabled = true; out.textContent = "Testing…";
-          SS.test(id).then(function (r) { out.textContent = (r.ok ? "✔ " : "✖ ") + r.message; out.className = "note srcTestMsg " + (r.ok ? "okmsg" : "badmsg"); }).then(function () { b.disabled = false; refreshStatus(); });
+          SS.setCreds(patch).then(function () { return SS.test(id); }, function (e) { return { ok: false, message: e.message }; }).then(function (r) { out.textContent = (r.ok ? "✔ " : "✖ ") + r.message; out.className = "note srcTestMsg " + (r.ok ? "okmsg" : "badmsg"); }).then(function () { b.disabled = false; refreshStatus(); });
         };
       });
       $("#passLock", el).onclick = function () {
         var pw = $("#passIn", el).value, m = $("#passMsg", el);
-        (SS.isLocked() ? SS.unlock(pw) : SS.lock(pw)).then(function () { m.textContent = SS.hasPassphrase() ? "Done – credentials are encrypted on this device." : "Done."; $("#passIn", el).value = ""; render(); }, function (e) { m.textContent = e && e.kind === "config" ? e.message : "Wrong passphrase or unreadable data."; });
+        (SS.isLocked() ? SS.unlock(pw) : SS.lock(pw)).then(function () { m.textContent = SS.hasPassphrase() ? "Done – credentials are encrypted on this device." : "Done."; $("#passIn", el).value = ""; render(); }, function (e) { m.textContent = e && (e.kind === "config" || e.kind === "storage" || e.kind === "locked") ? e.message : "Wrong passphrase or unreadable data."; });
       };
-      var pr = $("#passRemove", el); if (pr) pr.onclick = function () { SS.removePassphrase().then(function () { $("#passMsg", el).textContent = "Passphrase removed – credentials are stored unencrypted again."; render(); }); };
+      var pr = $("#passRemove", el); if (pr) pr.onclick = function () { SS.removePassphrase().then(function () { $("#passMsg", el).textContent = "Passphrase removed – the encrypted copy was deleted; credentials now stay in this tab only (nothing is written to disk)."; render(); }); };
       $("#forgetCreds", el).onclick = function () { if (!confirm("Delete all stored Space-Track / SatNOGS / N2YO credentials and the proxy access token from this browser?")) return; SS.forgetCreds(); render(); $("#passMsg", el).textContent = "All credentials were deleted from this device."; };
       $("#txFetch", el).onclick = function () {
         var b = this, m = $("#txMsg", el); m.textContent = "Fetching…"; b.disabled = true;
@@ -228,10 +242,10 @@
       '<button class="btn primary block" id="gpsBtn" type="button">📍 Use my current location</button>' +
       '<p class="note" id="gpsMsg">Location stays on your device (it is only stored in this browser). It is never sent anywhere.</p>' +
       '<div class="fields">' +
-      '<div class="field"><label for="latIn">Latitude (°, N+)</label><input class="inp" id="latIn" inputmode="decimal" autocomplete="off" placeholder="30.2672" value="' + (S.hasLocation() ? s.lat : "") + '"></div>' +
-      '<div class="field"><label for="lonIn">Longitude (°, E+)</label><input class="inp" id="lonIn" inputmode="decimal" autocomplete="off" placeholder="-97.7431" value="' + (S.hasLocation() ? s.lon : "") + '"></div>' +
+      '<div class="field"><label for="latIn">Latitude (°, N+)</label><input class="inp" id="latIn" inputmode="decimal" autocomplete="off" placeholder="e.g. 47.6 (decimal °)" value="' + (S.hasLocation() ? s.lat : "") + '"></div>' +
+      '<div class="field"><label for="lonIn">Longitude (°, E+)</label><input class="inp" id="lonIn" inputmode="decimal" autocomplete="off" placeholder="e.g. -122.3 (decimal °)" value="' + (S.hasLocation() ? s.lon : "") + '"></div>' +
       '<div class="field"><label for="altIn">Elevation (m)</label><input class="inp" id="altIn" inputmode="decimal" autocomplete="off" placeholder="0" value="' + (s.alt || 0) + '"></div>' +
-      '<div class="field"><label for="gridIn">Maidenhead grid</label><input class="inp" id="gridIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="EM10dg" value="' + (S.hasLocation() ? G.toGrid(s.lat, s.lon, 6) : "") + '"></div>' +
+      '<div class="field"><label for="gridIn">Maidenhead grid</label><input class="inp" id="gridIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. CN87ts (optional)" value="' + (S.hasLocation() ? G.toGrid(s.lat, s.lon, 6) : "") + '"></div>' +
       '</div><div class="note" id="locMsg">Type a grid square and the centre of it is used as lat/lon, or type lat/lon and the grid is filled in.</div>' +
       '<div class="actions"><button class="btn primary" id="saveLoc" type="button">Save location</button></div>';
     var lat = $("#latIn", el), lon = $("#lonIn", el), alt = $("#altIn", el), grid = $("#gridIn", el), msg = $("#locMsg", el);
@@ -256,6 +270,7 @@
       S.set({ lat: a, lon: o, alt: h }); passCache = {}; observer._o = null;
       msg.textContent = "Saved: " + obsLabel() + ".";
       toast("Location saved: " + G.toGrid(a, o, 6)); refreshNextBar();
+      setTimeout(function () { install.show(); }, 1500);   // first useful moment to offer installation
       if (onSaved) onSaved();
     };
     $("#gpsBtn", el).onclick = function () {
@@ -400,9 +415,9 @@
       '<details class="more"><summary>How AOS/LOS and “visible” are decided</summary><p class="note">AOS/LOS = the satellite crosses your minimum elevation (' + S.settings.minEl + '°), using geometric elevation (no atmospheric refraction, which would add roughly 0.5° at the horizon). “Visible” = the satellite is sunlit (simple cylindrical Earth-shadow model, no penumbra), the sun is below −6° at your location (civil twilight), and the satellite is above your horizon. Real visibility also depends on brightness, sky glow, weather and terrain.</p></details>' +
       '<div class="canvaswrap"><canvas id="sky" role="img" aria-label="Sky plot of the pass"></canvas></div>' +
       '<p class="note">Sky plot: centre = overhead, rim = horizon, N up, E right. <span style="color:#22d3ee">━</span> track, <span style="color:#fbbf24">━</span> visible part (ISS/Tiangong), ticks = time ' + (utc() ? "(UTC)" : "(local)") + ", dashed ring = minimum elevation.</p>" +
-      '<div class="actions"><button class="btn" id="icsOne">📅 Add to calendar (.ics)</button><button class="btn" id="remBtn"></button>' +
+      '<div class="actions"><button class="btn primary" id="icsOne">📅 Add to calendar (.ics) – alerts even when the app is closed</button><button class="btn" id="remBtn"></button>' +
       (hasRadio ? '<a class="btn" href="#/doppler/' + n + "/" + Math.round(pass.aos) + '">📻 Doppler for this pass</a>' : "") + '<a class="btn" href="#/live/' + n + '">🌍 Live tracker</a></div>' +
-      '<div class="note" id="remMsg"></div><div id="n2box"></div></section>' +
+      '<div class="note" id="remMsg">Tip: the calendar event carries its own alert and works with the app closed. The in-app reminder only fires while SatPass is open or still running in the background.</div><div id="n2box"></div></section>' +
       '<section class="card"><h2>Az / El / Range</h2><div class="toolbar"><span class="muted">Step</span><span class="seg" id="stepSeg">' + [10, 20, 30].map(function (v) { return '<button data-v="' + v + '" class="' + (v === step ? "on" : "") + '">' + v + " s</button>"; }).join("") + '</span></div>' +
       '<div class="note" id="stepNote"></div><div class="tblwrap"><table><thead><tr><th>Time</th><th>Az</th><th></th><th>El</th><th>Range km</th><th>Rate km/s</th></tr></thead><tbody id="tbody"></tbody></table></div></section>' +
       '<p class="disclaimer">Predicted from a TLE ' + F.age(Date.now() - e.epochMs) + " old (epoch " + new Date(e.epochMs).toISOString().slice(0, 16).replace("T", " ") + " UTC). Sat positions drift with TLE age (ISS: roughly 1–3 km/day along-track); treat times as ±several seconds when fresh, ±minutes when old.</p>";
@@ -430,7 +445,7 @@
     var rb = $("#remBtn");
     function remState() {
       var r = reminders().filter(function (x) { return x.id === remKey; })[0];
-      rb.textContent = r ? "🔔 Reminder set (" + r.lead + " min before) – cancel" : "🔔 Remind me (" + S.settings.leadMin + " min before)";
+      rb.textContent = r ? "🔔 In-app reminder set (" + r.lead + " min before) – cancel" : "🔔 In-app reminder (" + S.settings.leadMin + " min before, only while SatPass is open)";
       $("#remMsg").textContent = r ? "" : notifHelp();
     }
     rb.onclick = function () {
@@ -891,10 +906,13 @@
       if (isStandalone()) return;
       var dis = S.settings.installDismissed; if (dis && Date.now() - dis < 14 * DAY) return;
       if (!isIOS() && !install.deferred) return;
+      // not on the very first screen: only once a location is saved (the user has started using the app) or from the 2nd visit on
+      if (!S.hasLocation() && S.load("visits", 0) < 2) return;
       $("#install-sub").textContent = isIOS() ? "Tap Install for the Add to Home Screen steps." : "Add it to your home screen for quick offline use.";
       $("#install-banner").hidden = false; document.body.classList.add("has-banner");
     },
     init: function () {
+      S.save("visits", S.load("visits", 0) + 1);
       window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); install.deferred = e; setTimeout(install.show, 1200); });
       window.addEventListener("appinstalled", function () { install.deferred = null; install.hide(); toast("SatPass installed"); });
       $("#install-btn").onclick = install.prompt;
@@ -929,15 +947,17 @@
     setTimeout(autoRefresh, 2500);
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
       navigator.serviceWorker.register("sw.js").then(function (reg) {
+        function offerUpdate(w) { $("#update-bar").hidden = false; $("#update-btn").onclick = function () { w.postMessage("skipWaiting"); }; }
+        // a new version may already be installed and waiting (e.g. found during a previous visit that was closed before the bar was shown)
+        if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg.waiting);
         reg.addEventListener("updatefound", function () {
           var nw = reg.installing; if (!nw) return;
-          nw.addEventListener("statechange", function () {
-            if (nw.state === "installed" && navigator.serviceWorker.controller) {
-              $("#update-bar").hidden = false;
-              $("#update-btn").onclick = function () { nw.postMessage("skipWaiting"); };
-            }
-          });
+          nw.addEventListener("statechange", function () { if (nw.state === "installed" && navigator.serviceWorker.controller) offerUpdate(nw); });
         });
+        // long-lived installed PWAs are rarely reloaded: look for a new version whenever the app returns to the foreground and about once an hour
+        function check() { try { reg.update().catch(function () {}); } catch (e) {} }
+        document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") check(); });
+        setInterval(check, 3600e3);
       }).catch(function (e) { console.warn("SW registration failed", e); });
       var reloading = false;
       navigator.serviceWorker.addEventListener("controllerchange", function () { if (reloading || $("#update-bar").hidden) return; reloading = true; location.reload(); });

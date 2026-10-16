@@ -11,7 +11,7 @@ body.has-banner{padding-bottom:calc(156px + env(safe-area-inset-bottom))}
 .hb{min-width:44px;min-height:44px;border:0;background:transparent;color:inherit;font-size:1.6rem;border-radius:10px;cursor:pointer}
 .hb.sm{font-size:1.1rem}
 .hb:active{background:#ffffff22}
-.pill{font:inherit;font-size:.85rem;font-weight:650;min-height:36px;padding:4px 12px;border-radius:999px;border:1px solid #ffffff55;background:transparent;color:inherit;cursor:pointer}
+.pill{font:inherit;font-size:.85rem;font-weight:650;min-height:44px;min-width:44px;padding:4px 12px;border-radius:999px;border:1px solid #ffffff55;background:transparent;color:inherit;cursor:pointer}
 .pill:active{background:#ffffff22}
 main{max-width:820px;margin:0 auto;padding:12px}
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:15;display:flex;background:var(--hdr);padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -2px 8px #0005}
@@ -42,6 +42,9 @@ select.inp{appearance:auto}
 .install{position:fixed;left:8px;right:8px;bottom:calc(64px + env(safe-area-inset-bottom));z-index:20;display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;box-shadow:0 6px 24px #0006;max-width:744px;margin:0 auto}
 .install[hidden]{display:none}
 .install img{border-radius:9px}
+.install .btn,.install .hb{min-height:44px;min-width:44px}
+.toolbar select.inp{max-width:100%;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
+@media (max-width:360px){.toolbar .inp{flex:1 1 100%}.toolbar select.inp{font-size:15px}}
 .install .it{flex:1;display:flex;flex-direction:column;font-size:.85rem}
 .install .it span{color:var(--muted)}
 .update{background:var(--acc2);color:#fff;padding:8px 12px;display:flex;justify-content:center;align-items:center;gap:10px}

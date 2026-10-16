@@ -91,6 +91,13 @@ const ids = a => a.slice().sort((x, y) => x - y);
   }
   {
     const m = Cat.migrate(null, "weird");
+    {
+      const g = x => Cat.migrate(x, "curated").settings;
+      ok("migrate(): out-of-range / non-numeric lat, lon are dropped together (no half-valid location)", !("lat" in g({ lat: 91, lon: 10 })) && !("lon" in g({ lat: 91, lon: 10 })) && !("lat" in g({ lat: 10, lon: 181 })) && !("lat" in g({ lat: "x", lon: 5 })) && !("lon" in g({ lat: null, lon: 5 })) && !("lat" in g({ lat: NaN, lon: 5 })) && !("lat" in g({ lat: Infinity, lon: 5 })));
+      ok("migrate(): valid location kept (numeric strings are converted)", g({ lat: 30.27, lon: -97.74 }).lat === 30.27 && g({ lat: "30.27", lon: "-97.74" }).lon === -97.74 && g({ lat: -90, lon: 180 }).lat === -90);
+      ok("migrate(): minEl clamped to 0..80 (else 10), days integer 1..10 (else 3), alt -500..9000 (else 0)", g({ minEl: 200 }).minEl === 10 && g({ minEl: -1 }).minEl === 10 && g({ minEl: 15 }).minEl === 15 && g({ days: 99 }).days === 3 && g({ days: 0 }).days === 3 && g({ days: 5.9 }).days === 5 && g({ days: "x" }).days === 3 && g({ alt: 1e9 }).alt === 0 && g({ alt: 151 }).alt === 151);
+      ok("migrate(): settings without those keys are not given defaults here (the store adds DEFAULTS)", !("minEl" in g({})) && !("days" in g({})) && !("lat" in g({})));
+    }
     ok("migrate(): null/garbage inputs -> empty settings, mode 'curated'", m.settings.schema === 2 && m.satMode === "curated" && !("favs" in m.settings));
     ok("migrate(): old mode 'curated' / 'favs' stay, unknown falls back", Cat.migrate({}, "favs").satMode === "favs" && Cat.migrate({}, "curated").satMode === "curated" && Cat.migrate({}, "searched").satMode === "searched" && Cat.migrate({}, undefined).satMode === "curated");
     ok("migrate(): non-array favs are dropped (defaults apply)", !("favs" in Cat.migrate({ favs: "25544" }, "all").settings));

@@ -10,12 +10,13 @@ function resp(status, body, headers) { headers = headers || {}; return { ok: sta
 const isCT = u => /celestrak\.org/.test(u);
 
 function load(opts = {}) {
-  const ls = Object.assign({}, opts.ls || {}), reqs = [], logs = [];
+  const ls = Object.assign({}, opts.ls || {}), ss = opts.ss || {}, reqs = [], logs = [];
   const fakeConsole = { log: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push(a.join(" ")), error: (...a) => logs.push(a.join(" ")), info: (...a) => logs.push(a.join(" ")) };
   const ctx = {
     console: fakeConsole, Promise, Date, JSON, Object, Math, Array, Number, String, RegExp, Error, TypeError, parseInt, parseFloat, isFinite, isNaN, Uint8Array, TextEncoder, TextDecoder, URL, URLSearchParams, encodeURIComponent, decodeURIComponent, Buffer,
     crypto: require("crypto").webcrypto, btoa: s => Buffer.from(s, "binary").toString("base64"), atob: s => Buffer.from(s, "base64").toString("binary"),
-    localStorage: { getItem: k => (k in ls ? ls[k] : null), setItem: (k, v) => { ls[k] = String(v); }, removeItem: k => { delete ls[k]; } },
+    localStorage: { getItem: k => (k in ls ? ls[k] : null), setItem: (k, v) => { if (opts.quota && opts.quota(k)) { const e = new Error("full"); e.name = "QuotaExceededError"; throw e; } ls[k] = String(v); }, removeItem: k => { delete ls[k]; } },
+    sessionStorage: opts.noSession ? undefined : { getItem: k => (k in ss ? ss[k] : null), setItem: (k, v) => { ss[k] = String(v); }, removeItem: k => { delete ss[k]; } },
     navigator: { onLine: true }, AbortController, clearTimeout,
     setTimeout: (fn, ms) => (ms === 1200 || ms === 2000 ? (Promise.resolve().then(fn), 0) : setTimeout(fn, ms)),
     fetch: (url, init) => { url = String(url); reqs.push({ url, init: init || {} }); const r = (opts.fetch || (() => resp(500, "unstubbed")))(url, init || {}, reqs.length); return r instanceof Error ? Promise.reject(r) : Promise.resolve(r); }
@@ -23,7 +24,7 @@ function load(opts = {}) {
   ctx.window = ctx; ctx.self = ctx; vm.createContext(ctx);
   const run = f => vm.runInContext(rd(f), ctx, { filename: f });
   ["js/tle.js", "js/radio.js", "data/sar.js", "js/catalog.js", "js/sources.js", "data/tle-snapshot.js", "js/store.js"].forEach(run);
-  const S = ctx.SatStore; S.init(); return { S, ls, reqs, logs, ctx };
+  const S = ctx.SatStore; S.init(); return { S, ls, ss, reqs, logs, ctx };
 }
 const proxied = (reqs, p) => reqs.filter(r => r.url.indexOf(PROXY + p) === 0);
 const stOk = (url) => /\/spacetrack\/gp/.test(url) ? resp(200, fx("spacetrack-gp.json"), { "X-SatPass-Cache": "MISS" }) : null;
@@ -166,14 +167,14 @@ const setup = (S, enable) => { S.sources.setConfig({ proxy: PROXY, enabled: enab
 
   // ---------- credentials: storage, forget, passphrase, leaks
   {
-    const { S, ls, logs, ctx } = load({ fetch: (u) => health(u) || stOk(u) || resp(404, "") });
+    const { S, ls, ss, logs, ctx } = load({ fetch: (u) => health(u) || stOk(u) || resp(404, "") });
     await setup(S, { spacetrack: true, satnogs: true, n2yo: true });
     await S.sources.test("spacetrack"); await S.sources.test("n2yo"); await S.refresh();
-    const others = Object.keys(ls).filter(k => k !== "satpass:creds");
-    ok("credentials are stored in exactly one localStorage key; no other key (settings, status, cache, limiter…) contains any secret", ls["satpass:creds"] && others.every(k => SECRETVALS.every(s => ls[k].indexOf(s) < 0)), others.filter(k => SECRETVALS.some(s => ls[k].indexOf(s) >= 0)));
+    ok("1.2.1: without a passphrase NO secret is written to localStorage at all (session storage / memory only)", !("satpass:creds" in ls) && Object.keys(ls).every(k => SECRETVALS.every(s => ls[k].indexOf(s) < 0)) && S.sources.credMode() === "session", Object.keys(ls).filter(k => SECRETVALS.some(s => ls[k].indexOf(s) >= 0)));
+    ok("…they live in this tab's sessionStorage only", /stIdentity/.test(ss["satpass:creds"]) && Object.keys(S.sources.getCreds()).length === 5);
     ok("nothing was ever written to console.*", logs.length === 0, logs);
     S.sources.forgetCreds();
-    ok("Forget credentials: key removed, getCreds empty, sources not ready, configuration (proxy, order) kept", !("satpass:creds" in ls) && Object.keys(S.sources.getCreds()).length === 0 && !S.sources.readiness("spacetrack").ready && S.sources.config().proxy === PROXY);
+    ok("Forget credentials: key removed, getCreds empty, sources not ready, configuration (proxy, order) kept", !("satpass:creds" in ls) && !("satpass:creds" in ss) && Object.keys(S.sources.getCreds()).length === 0 && !S.sources.readiness("spacetrack").ready && S.sources.config().proxy === PROXY);
     ok("after Forget, no secret remains anywhere in localStorage", Object.keys(ls).every(k => SECRETVALS.every(s => ls[k].indexOf(s) < 0)));
     // reload: still forgotten
     ok("a fresh start after Forget has no credentials", Object.keys(load({ ls }).S.sources.getCreds()).length === 0);
@@ -192,8 +193,80 @@ const setup = (S, enable) => { S.sources.setConfig({ proxy: PROXY, enabled: enab
     ok("wrong passphrase refused", await B.S.sources.unlock("nope").then(() => false, e => e.kind === "auth"));
     ok("right passphrase unlocks and the source is ready again", await B.S.sources.unlock("only-me-123") === true && !B.S.sources.isLocked() && B.S.sources.readiness("spacetrack").ready);
     await B.S.sources.removePassphrase();
-    ok("removing the passphrase stores credentials unencrypted again (documented)", /stIdentity/.test(B.ls["satpass:creds"]) && !B.S.sources.hasPassphrase());
-    ok("short passphrase refused", await A.S.sources.lock("123").then(() => false, e => e.kind === "config"));
+    ok("removing the passphrase does NOT write plaintext to localStorage: the encrypted copy is deleted, creds stay in this tab only", !("satpass:creds" in B.ls) && /stIdentity/.test(B.ss["satpass:creds"]) && !B.S.sources.hasPassphrase() && B.S.sources.credMode() === "session");
+    ok("short passphrase refused (minimum is 10 characters)", await A.S.sources.lock("123").then(() => false, e => e.kind === "config") && await A.S.sources.lock("123456789").then(() => false, e => e.kind === "config") && /at least 10/.test(await A.S.sources.lock("x").then(() => "", e => e.message)));
+  }
+  // ---------- 1.2.1: partial CelesTrak failure -> next source fills the missing categories; age bookkeeping
+  {
+    const A = load({ fetch: (u) => isCT(u) ? (/GROUP=weather/.test(u) ? resp(500, "boom") : resp(200, fx("tle-25544.txt"))) : (health(u) || stOk(u) || resp(404, "")) });
+    await setup(A.S, { spacetrack: true });
+    const r = await A.S.refresh();
+    const st = proxied(A.reqs, "/spacetrack/gp");
+    ok("one failed CelesTrak query (weather) no longer ends the refresh: Space-Track is asked for the missing category", r.ok && r.partialFrom === "celestrak" && r.source === "spacetrack" && st.length >= 1 && /weather/.test(r.message) && /GROUP=weather|failed: weather/.test(r.message), r.message);
+    const B = load({ fetch: (u) => isCT(u) ? (/GROUP=weather/.test(u) ? resp(500, "boom") : resp(200, fx("tle-25544.txt"))) : resp(404, "") });
+    const r2 = await B.S.refresh();
+    ok("partial CelesTrak result with nothing else enabled is still reported as success with the missing part named", r2.ok && /failed: weather/.test(r2.message) && /No other enabled source|weather/.test(r2.message), r2.message);
+  }
+  {
+    const A = load({ fetch: (u) => health(u) || stOk(u) || resp(404, "") }); const f0 = A.S.data.fetchedAt;
+    const r = A.S.importText(fx("tle-25544.txt"), "old.txt");
+    ok("importing an old TLE does not reset the 'fetched N days ago' age", r.ok && A.S.data.fetchedAt === f0, [f0, A.S.data.fetchedAt]);
+    const old = JSON.stringify(JSON.parse(fx("spacetrack-gp.json")).filter(o => o.NORAD_CAT_ID === "25544").map(o => { const c = Object.assign({}, o, { EPOCH: "2026-10-01T00:00:00.000000" }); delete c.TLE_LINE0; delete c.TLE_LINE1; delete c.TLE_LINE2; return c; }));
+    const P = load({ fetch: (u) => isCT(u) ? new TypeError("Failed to fetch") : (health(u) || (/\/spacetrack\/gp/.test(u) ? resp(200, old) : resp(404, ""))) }); await setup(P.S, { spacetrack: true }); const g0 = P.S.data.fetchedAt;
+    const pr = await P.S.refresh();
+    ok("a Space-Track pull that delivers nothing newer does not reset the data age (delivered ISS epoch 1 Oct < bundled)", pr.ok && pr.source === "spacetrack" && P.S.data.fetchedAt === g0 && pr.updated === 0, [g0, P.S.data.fetchedAt, pr.updated]);
+  }
+  // ---------- 1.2.1 credential hardening
+  {
+    // reload within the same tab keeps session creds; a new tab/browser start (fresh sessionStorage) does not
+    const A = load({ fetch: (u) => health(u) || resp(404, "") }); await setup(A.S, { spacetrack: true });
+    const same = load({ ls: A.ls, ss: A.ss }), fresh = load({ ls: A.ls });
+    ok("session credentials survive a reload in the same tab and are gone in a new session", same.S.sources.getCreds().stPassword === CRED.stPassword && Object.keys(fresh.S.sources.getCreds()).length === 0);
+    const nos = load({ noSession: true }); await setup(nos.S, { spacetrack: true });
+    ok("no sessionStorage available: credentials still work in memory, nothing persisted", nos.S.sources.getCreds().stIdentity === CRED.stIdentity && !("satpass:creds" in nos.ls));
+  }
+  {
+    // migration of a 1.2.0 plaintext copy
+    const legacy = { "satpass:creds": JSON.stringify(CRED), "satpass:sources": JSON.stringify({ proxy: PROXY, enabled: { spacetrack: true } }) };
+    const A = load({ ls: Object.assign({}, legacy), fetch: (u) => health(u) || resp(404, "") });
+    ok("1.2.0 plaintext credentials are still usable and flagged 'legacy-plain' (UI offers to encrypt or remove)", A.S.sources.credMode() === "legacy-plain" && A.S.sources.getCreds().stPassword === CRED.stPassword && A.S.sources.readiness("spacetrack").ready);
+    await A.S.sources.lock("a-long-passphrase");
+    ok("encrypting migrates it: localStorage holds only ciphertext, mode 'encrypted'", /"enc":1/.test(A.ls["satpass:creds"]) && SECRETVALS.every(v => A.ls["satpass:creds"].indexOf(v) < 0) && A.S.sources.credMode() === "encrypted" && JSON.parse(A.ls["satpass:creds"]).iter >= 600000);
+    const B = load({ ls: Object.assign({}, legacy) });
+    await B.S.sources.dropPlaintextCopy();
+    ok("'remove the saved plaintext copy' keeps creds for this tab but deletes the localStorage copy", !("satpass:creds" in B.ls) && B.S.sources.credMode() === "session" && /stIdentity/.test(B.ss["satpass:creds"]));
+    const C = load({ ls: Object.assign({}, legacy) }); await C.S.sources.setCreds({ n2yoKey: "other-key-1" });
+    ok("editing a credential while a plaintext copy exists also removes that copy (no new plaintext persistence)", !("satpass:creds" in C.ls) && C.S.sources.getCreds().n2yoKey === "other-key-1");
+  }
+  {
+    // Paul M2: 'Test connection' while LOCKED must not overwrite/delete the encrypted blob
+    const A = load({ fetch: (u) => health(u) || stOk(u) || resp(404, "") });
+    await setup(A.S, { spacetrack: true }); await A.S.sources.lock("only-me-123");
+    const enc = A.ls["satpass:creds"];
+    const B = load({ ls: A.ls, fetch: (u) => health(u) || stOk(u) || resp(404, "") });
+    ok("reloaded: locked", B.S.sources.isLocked());
+    const r1 = await B.S.sources.setCreds({ stIdentity: "", stPassword: "", n2yoKey: "NEWKEY-1234" }).then(() => "resolved", e => e.kind);
+    ok("setCreds while locked is rejected (kind 'locked') and the stored blob is byte-identical", r1 === "locked" && B.ls["satpass:creds"] === enc && !("satpass:creds" in B.ss), r1);
+    ok("lock()/removePassphrase() while locked are also rejected without touching storage", await B.S.sources.lock("another-pass-12").then(() => "ok", e => e.kind) === "locked" && await B.S.sources.removePassphrase().then(() => "ok", e => e.kind) === "locked" && B.ls["satpass:creds"] === enc);
+    const C = load({ ls: B.ls });
+    ok("after the attempt a reload is still locked with a passphrase and the right passphrase still unlocks", C.S.sources.isLocked() && C.S.sources.hasPassphrase() && await C.S.sources.unlock("only-me-123") === true && C.S.sources.getCreds().stPassword === CRED.stPassword);
+    // tampered iteration counts
+    const t = JSON.parse(enc), t1 = Object.assign({}, t, { iter: 1 }), t2 = Object.assign({}, t, { iter: 4e9 });
+    const D = load({ ls: Object.assign({}, A.ls, { "satpass:creds": JSON.stringify(t1) }) }), E = load({ ls: Object.assign({}, A.ls, { "satpass:creds": JSON.stringify(t2) }) });
+    const t0 = Date.now();
+    ok("tampered iter=1 / iter=4e9: unlock fails with an auth error (clamped to 100k..2M), does not hang", await D.S.sources.unlock("x").then(() => "ok", e => e.kind) === "auth" && await E.S.sources.unlock("x").then(() => "ok", e => e.kind) === "auth" && Date.now() - t0 < 20000, Date.now() - t0);
+  }
+  {
+    // storage quota: failures are reported, not silent
+    let full = false; const fails = [];
+    const A = load({ quota: () => full, fetch: (u) => health(u) || resp(404, "") });
+    A.S.onSaveFail(f => fails.push(f));
+    full = true; A.S.set({ minEl: 20 });
+    ok("a failed localStorage write calls onSaveFail with key + quota flag", fails.length === 1 && fails[0].key === "settings" && fails[0].quota === true, fails);
+    const r = A.S.importText(fx("tle-25544.txt"), "t");
+    ok("importing TLEs when storage is full reports it (listener) and the data is still usable in memory", fails.some(f => f.key === "tle") && r.ok && /not saved|storage/i.test(r.message), [fails.map(f => f.key), r.message]);
+    const L = load({ quota: (k) => full, fetch: (u) => health(u) || resp(404, "") }); full = false; await L.S.sources.setCreds(CRED); await L.S.sources.lock("good-passphrase-1"); full = true;
+    ok("an encrypted-credentials save that hits the quota rejects with kind 'storage'", await L.S.sources.setCreds({ n2yoKey: "k-2222-2222" }).then(() => "ok", e => e.kind) === "storage");
   }
   {
     const { S } = load({ fetch: (u) => health(u) || resp(500, JSON.stringify({ error: "upstream said password=" + CRED.stPassword + " apiKey=" + CRED.n2yoKey + " identity=" + CRED.stIdentity }), { "X-SatPass-Error": "upstream" }) });

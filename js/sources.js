@@ -14,11 +14,14 @@
     celestrak: { id: "celestrak", label: "CelesTrak", direct: true, creds: [], site: "https://celestrak.org", docs: "https://celestrak.org/NORAD/documentation/gp-data-formats.php",
       limits: "asks for at most one identical query every 2 h", terms: "https://celestrak.org/webmaster.php" },
     spacetrack: { id: "spacetrack", label: "Space-Track", direct: false, creds: ["stIdentity", "stPassword"], site: "https://www.space-track.org", docs: "https://www.space-track.org/documentation",
-      limits: "API: < 30 requests/minute and < 300/hour; GP (TLE) data: at most 1 pull per hour for the same query; batch NORAD ids in one request", terms: "https://www.space-track.org/documentation#/user_agree" },
+      limits: "API: < 30 requests/minute and < 300/hour; GP (TLE) data: at most 1 pull per hour for the same query; batch NORAD ids in one request", terms: "https://www.space-track.org/documentation#/user_agree",
+      untested: "Not tested against the live Space-Track service (the author used no account). Built from the official documentation and a constructed fixture – expect rough edges." },
     satnogs: { id: "satnogs", label: "SatNOGS DB", direct: false, creds: [], optionalCreds: ["satnogsToken"], site: "https://db.satnogs.org", docs: "https://db.satnogs.org/api/",
-      limits: "anonymous API access is throttled (SatNOGS staff: 60 requests/hour anonymous, 240/hour with an API token); no published per-endpoint limits for tle/transmitters", terms: "https://db.satnogs.org/" },
+      limits: "anonymous API access is throttled (SatNOGS staff: 60 requests/hour anonymous, 240/hour with an API token); no published per-endpoint limits for tle/transmitters", terms: "https://db.satnogs.org/",
+      untested: "Anonymous TLE/transmitter endpoints were checked live; the API-token path is untested live." },
     n2yo: { id: "n2yo", label: "N2YO", direct: false, creds: ["n2yoKey"], site: "https://www.n2yo.com", docs: "https://www.n2yo.com/api/",
-      limits: "free key, per hour: tle 1000, positions 1000, visualpasses 100, radiopasses 100, above 100", terms: "https://www.n2yo.com/api/" }
+      limits: "free key, per hour: tle 1000, positions 1000, visualpasses 100, radiopasses 100, above 100", terms: "https://www.n2yo.com/api/",
+      untested: "Not tested against the live N2YO API (no key was used). Built from the official API documentation and its example responses." }
   };
   /* Rate windows enforced client-side BEFORE sending (kept below the published limits). key = source or source:op. */
   var LIMITS = {
@@ -70,10 +73,9 @@
     return { ok: true, url: m[1].toLowerCase() + "://" + m[2] + m[3], host: host, local: local };
   }
   /* The page's Content-Security-Policy (index.html) limits connect-src to these hosts. */
-  var CSP_CONNECT = ["'self'", "https://celestrak.org", "https://*.workers.dev", "http://localhost:*", "http://127.0.0.1:*"];
+  var CSP_CONNECT = ["'self'", "https://celestrak.org", "https://*.workers.dev"];   // deployed build: no localhost; edit index.html (and this list) for another proxy host or `wrangler dev`
   function proxyAllowedByCsp(u) {
     var v = validateProxyUrl(u); if (!v.ok) return false;
-    if (v.local) return true;
     return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.workers\.dev$/.test(v.host);
   }
   function credsComplete(id, creds) {
@@ -90,7 +92,7 @@
     if (opts.locked) return { ready: false, reason: "credentials are locked – enter your passphrase in Setup → Data sources", kind: "locked" };
     var p = validateProxyUrl(cfg && cfg.proxy);
     if (!p.ok) return { ready: false, reason: id === "spacetrack" || id === "satnogs" || id === "n2yo" ? META[id].label + " cannot be called straight from a browser (no CORS). Set your proxy URL in Setup → Data sources." : p.reason, kind: "config" };
-    if (!proxyAllowedByCsp(cfg.proxy)) return { ready: false, reason: "the proxy host is not allowed by this page's Content-Security-Policy (only *.workers.dev and localhost; edit index.html to allow another host)", kind: "config" };
+    if (!proxyAllowedByCsp(cfg.proxy)) return { ready: false, reason: "the proxy host is not allowed by this page's Content-Security-Policy (only https://*.workers.dev; edit the connect-src in index.html to allow another host or http://localhost for local development)", kind: "config" };
     if (!credsComplete(id, creds)) return { ready: false, reason: id === "spacetrack" ? "Space-Track user name and password are not set" : "N2YO API key is not set", kind: "config" };
     return { ready: true };
   }
@@ -268,7 +270,8 @@
   function b64(buf) { var s = "", a = new Uint8Array(buf); for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return (typeof btoa === "function" ? btoa(s) : Buffer.from(s, "binary").toString("base64")); }
   function unb64(str) { var s = typeof atob === "function" ? atob(str) : Buffer.from(str, "base64").toString("binary"), a = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
   function getSubtle(c) { c = c || (typeof crypto !== "undefined" ? crypto : null); if (!c || !c.subtle) throw SourceError("config", "This browser has no WebCrypto (needs HTTPS)."); return c; }
-  var PBKDF2_ITER = 250000;
+  var PBKDF2_ITER = 600000, ITER_MIN = 100000, ITER_MAX = 2000000, MIN_PASSPHRASE = 10;   // OWASP 2023: >= 600k for PBKDF2-HMAC-SHA256. Blobs written by 1.2.0 used 250k and still decrypt.
+  function clampIter(n) { n = Math.floor(Number(n)); return isFinite(n) ? Math.min(ITER_MAX, Math.max(ITER_MIN, n)) : PBKDF2_ITER; }   // a tampered blob can neither hang the tab (iter 1e9) nor weaken the KDF
   function deriveKey(c, pass, salt, iter) {
     return c.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]).then(function (k) {
       return c.subtle.deriveKey({ name: "PBKDF2", salt: salt, iterations: iter, hash: "SHA-256" }, k, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
@@ -281,7 +284,7 @@
   }
   function decryptCreds(blob, pass, c) {
     c = getSubtle(c);
-    return deriveKey(c, pass, unb64(blob.salt), blob.iter || PBKDF2_ITER).then(function (key) { return c.subtle.decrypt({ name: "AES-GCM", iv: unb64(blob.iv) }, key, unb64(blob.ct)); })
+    return deriveKey(c, pass, unb64(blob.salt), clampIter(blob.iter)).then(function (key) { return c.subtle.decrypt({ name: "AES-GCM", iv: unb64(blob.iv) }, key, unb64(blob.ct)); })
       .then(function (pt) { return JSON.parse(new TextDecoder().decode(pt)); }, function () { throw SourceError("auth", "Wrong passphrase."); });
   }
 
@@ -294,7 +297,7 @@
   }
 
   return {
-    IDS: IDS, META: META, LIMITS: LIMITS, MIN_PULL_MS: MIN_PULL_MS, AUTO_MIN_MS: AUTO_MIN_MS, N2YO_MAX_SATS: N2YO_MAX_SATS, ST_CHUNK: ST_CHUNK, CSP_CONNECT: CSP_CONNECT, PBKDF2_ITER: PBKDF2_ITER,
+    IDS: IDS, META: META, LIMITS: LIMITS, MIN_PULL_MS: MIN_PULL_MS, AUTO_MIN_MS: AUTO_MIN_MS, N2YO_MAX_SATS: N2YO_MAX_SATS, ST_CHUNK: ST_CHUNK, CSP_CONNECT: CSP_CONNECT, PBKDF2_ITER: PBKDF2_ITER, ITER_MIN: ITER_MIN, ITER_MAX: ITER_MAX, MIN_PASSPHRASE: MIN_PASSPHRASE, clampIter: clampIter,
     SourceError: SourceError, classifyHttp: classifyHttp, redact: redact, defaultConfig: defaultConfig, normalizeConfig: normalizeConfig, validateProxyUrl: validateProxyUrl, proxyAllowedByCsp: proxyAllowedByCsp,
     credsComplete: credsComplete, readiness: readiness, buildRequest: buildRequest, chunk: chunk, intList: intList,
     parseSpaceTrackGp: parseSpaceTrackGp, parseSatnogsTle: parseSatnogsTle, parseN2yoTle: parseN2yoTle, parseN2yoPasses: parseN2yoPasses, matchPasses: matchPasses,

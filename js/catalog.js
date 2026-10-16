@@ -73,6 +73,16 @@
     if (favs) { var seen = {}; favs = favs.filter(function (n) { return seen[n] ? false : (seen[n] = 1); }); }
     var out = Object.assign({}, settings);
     if (favs) out.favs = favs; else delete out.favs;
+    // range-check numeric settings read from storage (a corrupt / hand-edited value must not reach the SGP4 observer or the pass search)
+    function num(v, lo, hi, d) { v = typeof v === "string" && v.trim() !== "" ? Number(v) : v; return typeof v === "number" && isFinite(v) && v >= lo && v <= hi ? v : d; }
+    if (out.lat != null || out.lon != null) {
+      var la = num(out.lat, -90, 90, null), lo = num(out.lon, -180, 180, null);
+      if (la === null || lo === null) { delete out.lat; delete out.lon; } else { out.lat = la; out.lon = lo; }   // no half-valid location
+    }
+    if ("alt" in out) out.alt = num(out.alt, -500, 9000, 0);
+    if ("minEl" in out) out.minEl = num(out.minEl, 0, 80, 10);
+    if ("days" in out) { var dd = num(out.days, 1, 10, 3); out.days = Math.floor(dd); }
+    if ("leadMin" in out) out.leadMin = num(out.leadMin, 0, 120, 10);
     out.schema = 2;
     return { settings: out, satMode: validMode(satMode) ? satMode : "curated" };
   }

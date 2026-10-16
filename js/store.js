@@ -4,7 +4,9 @@
   var Tle = window.SatTle, Radio = window.SatRadio, Src = window.SatSources;
   var LS = "satpass:";
   function load(k, d) { try { var v = localStorage.getItem(LS + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
-  function save(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  var saveFailListeners = [], lastSaveFail = null;
+  function save(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); return true; } catch (e) { lastSaveFail = { key: k, at: Date.now(), quota: !!(e && (e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014)) }; saveFailListeners.forEach(function (f) { try { f(lastSaveFail); } catch (x) {} }); return false; } }
+  function onSaveFail(fn) { saveFailListeners.push(fn); }
   function del(k) { try { localStorage.removeItem(LS + k); } catch (e) {} }
 
   /* ---------- settings ---------- */
@@ -88,9 +90,9 @@
   function categoriesOf(n) { return Cat.CATEGORIES.filter(function (c) { return (data.groups[c.id] || []).indexOf(n) >= 0; }).map(function (c) { return c.id; }); }
   function catStatus(id) { var i = data.catInfo[id]; return i ? { fetchedAt: i.fetchedAt, origin: i.origin } : { fetchedAt: 0, origin: "none" }; }
   function persist(extra) {
-    save("tle", Object.assign({ tle: Tle.serialize(data.sats), fetchedAt: data.fetchedAt, source: data.source, origin: data.origin }, extra || {}));
+    var okTle = save("tle", Object.assign({ tle: Tle.serialize(data.sats), fetchedAt: data.fetchedAt, source: data.source, origin: data.origin }, extra || {}));
     var g = {}; Object.keys(data.groups).forEach(function (c) { if (data.catInfo[c] && data.catInfo[c].origin !== "bundled snapshot") g[c] = { ids: data.groups[c], fetchedAt: data.catInfo[c].fetchedAt, origin: data.catInfo[c].origin }; });
-    save("groups", g);
+    return save("groups", g) && okTle;
   }
   var meta = load("tlemeta", { lastAttempt: 0, lastError: null, lastOk: 0 });
   var catMeta = load("catmeta", {});   // per non-core category: {lastAttempt, lastOk, lastError}
@@ -164,7 +166,7 @@
         var m = mOf(id); if (okCats[id] || ids[id]) m.lastOk = now; m.lastError = failCats[id] ? "Some queries failed: " + failed.join(", ") : null; saveMeta(id);
       });
       persist(); emit();
-      return { ok: true, source: "celestrak", added: data.sats.length - before, failed: failed, message: "Updated " + got.length + " element sets from CelesTrak" + (failed.length ? " (failed: " + failed.join(", ") + ")" : "") + "." };
+      return { ok: true, source: "celestrak", added: data.sats.length - before, failed: failed, failedCats: Object.keys(failCats), message: "Updated " + got.length + " element sets from CelesTrak" + (failed.length ? " (failed: " + failed.join(", ") + ")" : "") + "." };
     })();
   }
 
@@ -177,33 +179,53 @@
   var srcStat = load("srcstatus", {});
   var limHist = load("srclimit", {});
   var CRED_KEYS = ["stIdentity", "stPassword", "satnogsToken", "n2yoKey", "proxyToken"];
-  var credVals = {}, credBlob = load("creds", null), credLocked = false, memPass = null;
+  /* Credential storage policy (1.2.1): the origin (github.io/<user>) is shared with every other project of the same account, and any script of that origin
+     can read localStorage. So secrets are NEVER written to localStorage in plaintext any more:
+       - with a passphrase  -> AES-GCM blob in localStorage ("encrypted")
+       - without            -> this tab's sessionStorage + memory only ("session"; gone when the tab is closed)
+       - 1.2.0 plaintext copies are still read (so nothing is lost) but flagged "legacy-plain": the UI offers to encrypt or remove them. */
+  var credVals = {}, credBlob = load("creds", null), credLocked = false, memPass = null, legacyPlain = false;
+  var SESS = null; try { SESS = typeof sessionStorage !== "undefined" ? sessionStorage : null; } catch (e) { SESS = null; }
+  function sessLoad() { try { var v = SESS && SESS.getItem(LS + "creds"); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+  function sessSave(o) { try { if (!SESS) return false; if (o && Object.keys(o).length) SESS.setItem(LS + "creds", JSON.stringify(o)); else SESS.removeItem(LS + "creds"); return true; } catch (e) { return false; } }
   function cleanCreds(o) { var r = {}; CRED_KEYS.forEach(function (k) { if (o && typeof o[k] === "string" && o[k]) r[k] = o[k]; }); return r; }
-  if (credBlob && credBlob.enc) credLocked = true; else credVals = cleanCreds(credBlob);
+  if (credBlob && credBlob.enc) credLocked = true;
+  else if (credBlob && Object.keys(cleanCreds(credBlob)).length) { credVals = cleanCreds(credBlob); legacyPlain = true; }
+  else credVals = cleanCreds(sessLoad());
+  function credMode() { return credLocked ? "locked" : memPass || (credBlob && credBlob.enc) ? "encrypted" : legacyPlain ? "legacy-plain" : Object.keys(credVals).length ? "session" : "none"; }
   function secretList() { return CRED_KEYS.map(function (k) { return credVals[k]; }).concat([memPass]); }
   function red(t) { return Src.redact(t, secretList()); }
   function saveCfg() { save("sources", srcCfg); }
+  function lockedErr() { return Src.SourceError("locked", "Credentials are locked – unlock them with your passphrase first. Nothing was changed."); }
   function persistCreds() {
-    if (memPass) return Src.encryptCreds(credVals, memPass).then(function (blob) { save("creds", blob); });
-    if (Object.keys(credVals).length) save("creds", credVals); else del("creds");
+    if (credLocked) return Promise.reject(lockedErr());   // never overwrite (or delete) the encrypted blob while it cannot be decrypted
+    if (memPass) return Src.encryptCreds(credVals, memPass).then(function (blob) {
+      if (!save("creds", blob)) throw Src.SourceError("storage", "Browser storage is full or blocked – the encrypted credentials could not be saved.");
+      credBlob = blob; legacyPlain = false; sessSave(null);
+    });
+    del("creds"); credBlob = null; legacyPlain = false;   // no passphrase: nothing readable is kept in localStorage
+    sessSave(credVals);   // (without sessionStorage the credentials simply stay in memory)
     return Promise.resolve();
   }
   function getCreds() { return Object.assign({}, credVals); }
   function clearBlocks(id) { (id ? [id] : Src.IDS).forEach(function (x) { var st = srcStat[x]; if (st) { st.blocked = null; st.fails = 0; st.backoffUntil = 0; } }); save("srcstatus", srcStat); }
   function setCreds(patch) {
+    if (credLocked) return Promise.reject(lockedErr());
     CRED_KEYS.forEach(function (k) { if (patch && k in patch) { var v = String(patch[k] == null ? "" : patch[k]).trim(); if (v) credVals[k] = v; else delete credVals[k]; } });
     clearBlocks(); return persistCreds();
   }
-  function forgetCreds() { credVals = {}; credBlob = null; credLocked = false; memPass = null; del("creds"); clearBlocks(); emit(); }
+  function forgetCreds() { credVals = {}; credBlob = null; credLocked = false; memPass = null; legacyPlain = false; del("creds"); sessSave(null); clearBlocks(); emit(); }
   function lockWithPassphrase(pass) {
-    if (!pass || pass.length < 6) return Promise.reject(Src.SourceError("config", "Use a passphrase of at least 6 characters."));
-    memPass = pass; return persistCreds().then(function () { credBlob = load("creds", null); });
+    if (credLocked) return Promise.reject(lockedErr());
+    if (!pass || pass.length < Src.MIN_PASSPHRASE) return Promise.reject(Src.SourceError("config", "Use a passphrase of at least " + Src.MIN_PASSPHRASE + " characters."));
+    var prev = memPass; memPass = pass; return persistCreds().then(function () { credBlob = load("creds", null); emit(); }, function (e) { memPass = prev; throw e; });
   }
   function unlock(pass) {
     if (!credBlob || !credBlob.enc) return Promise.resolve(true);
     return Src.decryptCreds(credBlob, pass).then(function (v) { credVals = cleanCreds(v); credLocked = false; memPass = pass; emit(); return true; });
   }
-  function removePassphrase() { memPass = null; credBlob = null; return persistCreds(); }
+  function removePassphrase() { if (credLocked) return Promise.reject(lockedErr()); memPass = null; return persistCreds().then(emit); }   // -> session-only; the encrypted copy is deleted
+  function dropPlaintextCopy() { if (!legacyPlain) return Promise.resolve(); return persistCreds().then(emit); }       // 1.2.0 plaintext copy -> session-only
   function setConfig(patch) {
     var before = JSON.stringify(srcCfg);
     srcCfg = Src.normalizeConfig(Object.assign({}, srcCfg, patch || {}, patch && patch.enabled ? { enabled: Object.assign({}, srcCfg.enabled, patch.enabled) } : {}));
@@ -287,8 +309,10 @@
     var newer = r.sats.filter(function (x) { return !(prevEpoch[x.norad] >= x.epochMs); }).length;
     var merged = Tle.merge(data.sats, r.sats); data.sats = merged; data.byId = {}; merged.forEach(function (x) { data.byId[x.norad] = x; });
     var label = Src.META[id].label + " (via proxy)";
-    if (cats.some(function (c) { return Cat.BY_ID[c].core; })) { data.fetchedAt = now; data.source = label; data.origin = label; }
-    cats.forEach(function (c) { data.catInfo[c] = { fetchedAt: now, origin: label }; var m = mOf(c); m.lastOk = now; m.lastError = null; saveMeta(c); });
+    // a pull that delivered nothing newer than what we had is not "fresh data": age follows the newest epoch received (never later than now)
+    var stamp = newer > 0 ? now : Math.max(0, Math.min(now, r.sats.reduce(function (m, x) { return Math.max(m, x.epochMs || 0); }, 0)));
+    if (cats.some(function (c) { return Cat.BY_ID[c].core; })) { data.fetchedAt = newer > 0 ? now : Math.max(data.fetchedAt, stamp); data.source = label; data.origin = label; }
+    cats.forEach(function (c) { data.catInfo[c] = { fetchedAt: newer > 0 ? now : Math.max((data.catInfo[c] && data.catInfo[c].fetchedAt) || 0, stamp), origin: label }; var m = mOf(c); m.lastOk = now; m.lastError = null; saveMeta(c); });
     persist(); emit();
     return { ok: true, source: id, added: data.sats.length - before, updated: newer, message: "Updated " + r.sats.length + " element sets from " + Src.META[id].label + " (" + newer + " newer than what you had)." + (r.note ? " " + r.note : "") };
   }
@@ -302,7 +326,7 @@
       var failed = [], first = null, now = Date.now();
       if (typeof navigator !== "undefined" && navigator.onLine === false) return { ok: false, offline: true, message: "You appear to be offline. Using TLEs from " + new Date(data.fetchedAt).toLocaleString() + "." };
       cats.forEach(function (c) { var m = mOf(c); m.lastAttempt = now; saveMeta(c); });
-      var chain = enabledChain(), tried = 0;
+      var chain = enabledChain(), tried = 0, partial = null, pullCats = cats;
       for (var i = 0; i < chain.length; i++) {
         var id = chain[i], st = stOf(id), rd = readiness(id);
         if (!rd.ready) { failed.push({ id: id, kind: rd.kind || "config", skipped: true, reason: rd.reason }); continue; }
@@ -310,13 +334,17 @@
         if (id !== "celestrak" && st.blocked === "auth") { failed.push({ id: id, kind: "auth", skipped: true, reason: "credentials were rejected – fix them in Setup → Data sources" }); continue; }
         if (id !== "celestrak" && opts.auto && now - st.lastOk < Src.AUTO_MIN_MS[id]) { failed.push({ id: id, kind: "rate", skipped: true, reason: "refreshed recently" }); continue; }
         if (id === "spacetrack" && opts.auto && Src.avoidBusyMinute(now)) { failed.push({ id: id, kind: "rate", skipped: true, reason: "waiting for a quiet minute (Space-Track asks scripts to avoid :00 and :30)" }); continue; }
-        if (id !== "celestrak" && !opts.auto && now - st.lastOk < Src.MIN_PULL_MS[id] && st.lastOk && !opts.force && cats.every(function (c) { return catStatus(c).fetchedAt >= st.lastOk - 1; })) { failed.push({ id: id, kind: "rate", skipped: true, reason: "pulled less than " + Src.MIN_PULL_MS[id] / 3600e3 + " h ago (" + Src.META[id].label + " asks for no more)" }); continue; }
+        if (id !== "celestrak" && !opts.auto && now - st.lastOk < Src.MIN_PULL_MS[id] && st.lastOk && !opts.force && pullCats.every(function (c) { return catStatus(c).fetchedAt >= st.lastOk - 1; })) { failed.push({ id: id, kind: "rate", skipped: true, reason: "pulled less than " + Src.MIN_PULL_MS[id] / 3600e3 + " h ago (" + Src.META[id].label + " asks for no more)" }); continue; }
         tried++;
         try {
           var r;
-          if (id === "celestrak") { r = await refreshCelesTrak(opts); if (!r.ok) { var ce = Src.SourceError(r.kind || "network", r.message); ce.offline = !!r.offline; throw ce; } }
-          else r = await refreshFromSource(id, cats, opts);
+          if (id === "celestrak") {
+            r = await refreshCelesTrak(opts); if (!r.ok) { var ce = Src.SourceError(r.kind || "network", r.message); ce.offline = !!r.offline; throw ce; }
+            // some CelesTrak queries failed: keep what arrived and ask the next source for the categories that are still missing
+            if (r.failedCats && r.failedCats.length && i < chain.length - 1) { partial = r; pullCats = r.failedCats.filter(function (c) { return Cat.BY_ID[c]; }); noteOk(id, r.message); continue; }
+          } else r = await refreshFromSource(id, pullCats, opts);
           noteOk(id, r.message);
+          if (partial) return Object.assign({}, r, { source: id, partialFrom: "celestrak", message: partial.message + " Missing " + pullCats.join(", ") + " filled from " + Src.META[id].label + ": " + r.message });
           var failedReal = failed.filter(function (f) { return !f.skipped || f.kind !== "config"; });
           return Object.assign({}, r, { source: id, fallbackFrom: failedReal.map(function (f) { return f.id; }), message: (failedReal.length ? Src.fallbackMessage(failedReal, id) + ". " : "") + r.message });
         } catch (e) {
@@ -325,6 +353,7 @@
           noteFail(id, kind, e.message || ""); failed.push({ id: id, kind: kind, message: red(e.message || "") });
         }
       }
+      if (partial) return Object.assign({}, partial, { message: partial.message + " No other enabled source could fill in: " + pullCats.join(", ") + "." });
       var real = failed.filter(function (f) { return !f.skipped; }), hint = "";
       var unconfigured = Src.IDS.filter(function (x) { return !srcCfg.enabled[x] || !readiness(x).ready; }).filter(function (x) { return x !== "celestrak"; });
       var skips = failed.filter(function (f) { return f.skipped && f.kind !== "config"; });
@@ -427,9 +456,12 @@
     if (/^[\[{]/.test(t)) { try { p = Src.parseSpaceTrackGp(t); } catch (e) { return { ok: false, message: red(e.message) }; } }   // OMM/GP JSON (Space-Track, CelesTrak, SatNOGS-converted)
     else p = Tle.parse(text);
     if (!p.sats.length) return { ok: false, message: p.errors[0] || "No valid TLEs found" };
-    setSats(Tle.merge(data.sats, p.sats), Math.max(data.fetchedAt, Date.now()), label || "Pasted by user", label ? "imported file" : "pasted");
-    persist(); emit();
-    return { ok: true, message: "Imported " + p.sats.length + " element set(s)" + (p.errors.length ? "; " + p.errors.length + " skipped" : "") + "." };
+    // Imported element sets must not make the whole data set look freshly downloaded: the "fetched N days ago" age follows the NEWEST EPOCH
+    // among the imported sets (never later than now, never older than what we already had).
+    var now = Date.now(), newest = p.sats.reduce(function (m, x) { return Math.max(m, x.epochMs || 0); }, 0);
+    setSats(Tle.merge(data.sats, p.sats), Math.max(data.fetchedAt, Math.min(now, newest)), label || "Pasted by user", label ? "imported file" : "pasted");
+    var saved = persist(); emit();
+    return { ok: true, saved: saved, message: "Imported " + p.sats.length + " element set(s)" + (p.errors.length ? "; " + p.errors.length + " skipped" : "") + "." + (saved ? "" : " ⚠ Not saved: browser storage is full or blocked – the data is kept only until the app is closed.") };
   }
   function lastError(id) { return mOf(id).lastError; }
   function lastOk(id) { return mOf(id).lastOk; }
@@ -440,9 +472,10 @@
     ensure: ensure, ensureAll: ensureAll, allLoaded: allLoaded, members: members, categoriesOf: categoriesOf, catStatus: catStatus, staleCategories: staleCategories,
     lookup: lookup, searched: searched,
     sources: { META: Src.META, config: function () { return JSON.parse(JSON.stringify(srcCfg)); }, setConfig: setConfig, chain: enabledChain, readiness: readiness, status: function (id) { return Object.assign({}, stOf(id)); },
-      inBackoff: inBackoff, getCreds: getCreds, setCreds: setCreds, forgetCreds: forgetCreds, isLocked: function () { return credLocked; }, hasPassphrase: function () { return !!(credBlob && credBlob.enc) || !!memPass; },
+      inBackoff: inBackoff, getCreds: getCreds, setCreds: setCreds, forgetCreds: forgetCreds, isLocked: function () { return credLocked; }, hasPassphrase: function () { return !!(credBlob && credBlob.enc) || !!memPass; }, credMode: credMode, dropPlaintextCopy: dropPlaintextCopy, minPassphrase: Src.MIN_PASSPHRASE,
       lock: lockWithPassphrase, unlock: unlock, removePassphrase: removePassphrase, test: testSource, usage: function (id, op) { return Src.limitUsed(limHist, id, op, Date.now()); }, n2yoUsage: n2yoUsage },
     fetchTransmitters: fetchTransmitters, liveTx: liveTx, liveRadios: liveRadios, txInfo: txInfo, clearLiveTx: clearLiveTx, txCompare: txCompare, n2yoPasses: n2yoPasses,
+    onSaveFail: onSaveFail, lastSaveFail: function () { return lastSaveFail; },
     lastError: lastError, lastOk: lastOk, load: load, save: save, del: del,
     constants: { AUTO_REFRESH_MS: AUTO_REFRESH_MS, CAT_AUTO_MS: CAT_AUTO_MS, MIN_MANUAL_MS: MIN_MANUAL_MS, FAIL_BACKOFF_MS: FAIL_BACKOFF_MS }, SOURCES: SOURCES
   };

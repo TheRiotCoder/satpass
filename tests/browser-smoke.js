@@ -123,7 +123,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   const ics = await ev(`__blobs.length ? __blobs[0].text() : null`);
   check('.ics export valid (VCALENDAR/VEVENT/VALARM, CRLF, UTC stamps)', !!ics && /^BEGIN:VCALENDAR\r\n/.test(ics) && /END:VCALENDAR\r\n$/.test(ics) && /BEGIN:VEVENT/.test(ics) && /DTSTART:\d{8}T\d{6}Z/.test(ics) && /BEGIN:VALARM/.test(ics) && !/[^\r]\n/.test(ics), ics && ics.split('\r\n').slice(0, 12));
   await ev(`document.querySelector('#remBtn').click()`); await sleep(500);
-  check('reminder can be set (button toggles, stored)', /Reminder set/.test(await ev(`document.querySelector('#remBtn').textContent`)) && await ev(`JSON.parse(localStorage.getItem('satpass:reminders')).length`) === 1);
+  check('reminder can be set (button toggles, stored)', /reminder set/i.test(await ev(`document.querySelector('#remBtn').textContent`)) && await ev(`JSON.parse(localStorage.getItem('satpass:reminders')).length`) === 1);
   check('notification permission/help text present', (await ev(`document.querySelector('#remMsg').textContent + '|' + (typeof Notification==='undefined'?'unsupported':Notification.permission)`)).length > 5, await ev(`typeof Notification==='undefined'?'unsupported':Notification.permission`));
   await ev(`document.querySelector('#remBtn').click()`); await sleep(200);
   check('reminder can be cancelled', await ev(`JSON.parse(localStorage.getItem('satpass:reminders')).length`) === 0);
@@ -199,7 +199,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   await ev(setVal('#dSat', '7530')); await sleep(1200);
   await ev(setVal('#dRadio', '1')); await sleep(300);   // AO-7: mode A (index 1)
   h = await holdSel(3000);
-  check('Doppler AO-7 (2 modes): mode A stays selected over several ticks', h.every(x => x.sel === '1' && x.nom.includes('145.8') && x.nom.includes('29.')), h[0] && h[0].nom);
+  check('Doppler AO-7 (2 modes): mode A stays selected over several ticks and is NON-inverting (1.2.1: 29.49 down <-> 145.94 up)', h.every(x => x.sel === '1' && x.nom.includes('145.94') && x.nom.includes('29.49') && x.nom.includes('non-inverting')), h[0] && h[0].nom);
   await ev(setVal('#dSat', '25544')); await sleep(1500);
   h = await holdSel(2500);
   check('Doppler: switching satellites and back restores each satellite\'s own radio (ISS #1, not reset to #0)', h.every(x => x.sel === '1' && near(mhzOf(x.big[0]), 437.8, 12)) && (await ev(`localStorage.getItem('satpass:dopRadio:7530')`)) === '1', h[0]);
@@ -365,6 +365,20 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
     }
   }
   await require('./browser-sources.js')({ ev, send, check, sleep, go, setVal, waitEvent, problems, consoleAll, LOCAL });
+  // ---- v1.2.1 UI checks
+  await go('#/passes');
+  await reloadAt('#/%E0%A4%A'); await sleep(1500);
+  check('malformed hash escape (#/%E0%A4%A) does not abort boot: passes view renders and the service worker is registered', await ev(`!!window.SatStore && !!document.querySelector('#passList') && navigator.serviceWorker.getRegistration().then(r => !!r)`));
+  await reloadAt('#/passes'); await sleep(1200);
+  check('Local/UTC pill is at least 44x44 px', await ev(`(() => { const r = document.querySelector('#tzBtn').getBoundingClientRect(); return r.height >= 43.5 && r.width >= 43.5; })()`));
+  await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 640, deviceScaleFactor: 2, mobile: true });
+  await go('#/doppler/7530'); await sleep(900);
+  check('320 px: Doppler satellite + transponder dropdowns are fully inside the viewport (not clipped)', await ev(`['#dSat', '#dRadio'].every(s => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.left >= -0.5 && r.right <= window.innerWidth + 0.5; }) && document.documentElement.scrollWidth <= window.innerWidth + 1`));
+  await go('#/doppler/25338'); await sleep(900);
+  check('NOAA 15 (decommissioned): Doppler view says "No signal" with the OSPO-based text and the radio note says DECOMMISSIONED', await ev(`/No signal/.test(document.querySelector('main').textContent) && /decommissioned on 19 Aug 2025/i.test(document.querySelector('main').textContent) && /DECOMMISSIONED/.test(document.querySelector('main').textContent)`));
+  await shot('12-320px-doppler-noaa');
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await go('#/passes'); await sleep(500);
   const onlineProblems = problems.slice();
 
   // ---- stale-TLE warning: shift the page clock +10 days

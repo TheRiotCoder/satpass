@@ -17,7 +17,7 @@ const creds = { stIdentity: "me@example.com", stPassword: "p@ss w/ord&=?#", satn
   ok("proxy URL: https workers.dev accepted and normalised", v("https://x.y.workers.dev/").ok && v("https://x.y.workers.dev/").url === "https://x.y.workers.dev");
   ok("proxy URL: http refused except localhost", !v("http://evil.example.com").ok && v("http://localhost:8787").ok && v("http://127.0.0.1:8787").ok);
   ok("proxy URL: user:password, query, fragment, empty, javascript: refused", !v("https://u:p@x.workers.dev").ok && !v("https://x.workers.dev/?a=1").ok && !v("https://x.workers.dev/#f").ok && !v("").ok && !v("javascript:alert(1)").ok && !v("ftp://x").ok);
-  ok("CSP allowance: only *.workers.dev and localhost", Src.proxyAllowedByCsp("https://a.b.workers.dev") && Src.proxyAllowedByCsp("http://localhost:8787") && !Src.proxyAllowedByCsp("https://proxy.example.com") && !Src.proxyAllowedByCsp("https://workers.dev.evil.com") && !Src.proxyAllowedByCsp("https://evilworkers.dev"));
+  ok("CSP allowance: only https *.workers.dev (localhost is valid as a URL but not allowed by the deployed CSP)", Src.proxyAllowedByCsp("https://a.b.workers.dev") && !Src.proxyAllowedByCsp("http://localhost:8787") && !Src.proxyAllowedByCsp("https://proxy.example.com") && !Src.proxyAllowedByCsp("https://workers.dev.evil.com") && !Src.proxyAllowedByCsp("https://evilworkers.dev"));
 
   // ---------- readiness
   ok("CelesTrak always ready", Src.readiness("celestrak", {}, {}).ready);
@@ -143,5 +143,20 @@ const creds = { stIdentity: "me@example.com", stPassword: "p@ss w/ord&=?#", satn
   ok("decrypt with a wrong passphrase fails with an auth error", await Src.decryptCreds(blob, "wrong", require("crypto").webcrypto).then(() => false, e => e.kind === "auth"));
   const blob2 = await Src.encryptCreds(creds, "correct horse", require("crypto").webcrypto);
   ok("fresh salt/iv each time", blob.salt !== blob2.salt && blob.iv !== blob2.iv && blob.ct !== blob2.ct);
+  // ---------- 1.2.1: KDF strength + tamper clamp
+  {
+    const wc = require("crypto").webcrypto;
+    ok("new blobs use >= 600000 PBKDF2 iterations; min passphrase length is 10", blob.iter >= 600000 && Src.PBKDF2_ITER >= 600000 && Src.MIN_PASSPHRASE === 10);
+    ok("clampIter: 1 -> 100000, 4e9 -> 2000000, NaN/undefined/garbage -> default, 250000 stays", Src.clampIter(1) === 100000 && Src.clampIter(4e9) === 2000000 && Src.clampIter(NaN) === Src.PBKDF2_ITER && Src.clampIter(undefined) === Src.PBKDF2_ITER && Src.clampIter("x") === Src.PBKDF2_ITER && Src.clampIter(250000) === 250000 && Src.clampIter(-5) === 100000);
+    // a blob written by 1.2.0 (250 000 iterations) must still decrypt
+    const salt = wc.getRandomValues(new Uint8Array(16)), iv = wc.getRandomValues(new Uint8Array(12));
+    const k = await wc.subtle.importKey("raw", new TextEncoder().encode("old passphrase"), "PBKDF2", false, ["deriveKey"]);
+    const key = await wc.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 250000, hash: "SHA-256" }, k, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+    const ct = Buffer.from(await wc.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(creds)))).toString("base64");
+    const old = { enc: 1, iter: 250000, salt: Buffer.from(salt).toString("base64"), iv: Buffer.from(iv).toString("base64"), ct };
+    ok("a 1.2.0 blob (250k iterations) still decrypts", JSON.stringify(await Src.decryptCreds(old, "old passphrase", wc)) === JSON.stringify(creds));
+    const t0 = Date.now();
+    ok("tampered iter (1 / 4e9 / negative) -> auth error in bounded time", (await Promise.all([1, 4e9, -9].map(it => Src.decryptCreds(Object.assign({}, old, { iter: it }), "old passphrase", wc).then(() => "ok", e => e.kind)))).every(x => x === "auth") && Date.now() - t0 < 15000, Date.now() - t0);
+  }
   done();
 })();
