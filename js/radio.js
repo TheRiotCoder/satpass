@@ -74,5 +74,7 @@
     var n = radios(norad).length, i = Math.floor(Number(stored));
     return n && i >= 0 && i < n ? i : 0;
   }
-  return { CURATED: CURATED, RADIO: RADIO, curated: curated, radios: radios, pickRadio: pickRadio, DISCLAIMER: DISCLAIMER };
+  // same clamping for a list that may include live (SatNOGS) entries after the bundled ones
+  function pickIndex(count, stored) { var i = Math.floor(Number(stored)); return count && i >= 0 && i < count ? i : 0; }
+  return { CURATED: CURATED, RADIO: RADIO, curated: curated, radios: radios, pickRadio: pickRadio, pickIndex: pickIndex, DISCLAIMER: DISCLAIMER };
 });

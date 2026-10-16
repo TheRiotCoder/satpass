@@ -16,7 +16,7 @@ function load(opts = {}) {
   };
   ctx.window = ctx; ctx.self = ctx; vm.createContext(ctx);
   const run = f => vm.runInContext(rd(f), ctx, { filename: f });
-  ["js/tle.js", "js/radio.js", "data/sar.js", "js/catalog.js", "data/tle-snapshot.js"].forEach(run);
+  ["js/tle.js", "js/radio.js", "data/sar.js", "js/catalog.js", "js/sources.js", "data/tle-snapshot.js"].forEach(run);
   const lazy = {}; // data/snap/<id>.js loaded on demand through a fake <script> element
   ctx.document = { createElement: () => ({}), head: { appendChild(el) { const m = /snap\/(\w+)\.js/.exec(el.src); lazy[m[1]] = (lazy[m[1]] || 0) + 1; setImmediate(() => { run("data/snap/" + m[1] + ".js"); el.onload(); }); } } };
   (opts.preload || []).forEach(id => run("data/snap/" + id + ".js"));
@@ -76,7 +76,7 @@ const ids = a => a.slice().sort((x, y) => x - y);
     const cached = T.serialize(T.parse(require("./harness").snapshot().tle).sats.slice(0, 40));
     const ls = {
       "satpass:settings": JSON.stringify({ lat: 30.27, lon: -97.74, alt: 150, utc: true, minEl: 15, days: 5, favs: [25544, "27607", 7530, 25544, -4, "x", 0], theme: "dark", leadMin: 10 }),
-      "satpass:satMode": JSON.stringify("all"), "satpass:tle": JSON.stringify({ tle: cached, fetchedAt: Date.parse(require("./harness").snapshot().fetchedAt) + 3600e3, source: "CelesTrak GP (celestrak.org)", origin: "CelesTrak" }),
+      "satpass:satMode": JSON.stringify("all"), "satpass:tle": JSON.stringify({ tle: cached, fetchedAt: Math.max(Date.parse(require("./harness").snapshot().fetchedAt) + 3600e3, Date.now() - 3600e3), source: "CelesTrak GP (celestrak.org)", origin: "CelesTrak" }),
       "satpass:tlemeta": JSON.stringify({ lastAttempt: Date.now() - 3600e3, lastError: null, lastOk: Date.now() - 3600e3 })
     };
     const { S, ls: out } = load({ ls });

@@ -15,7 +15,7 @@ if (LOCAL) { // serve the repo under /satpass/ to mimic the GitHub Pages subpath
 }
 const chrome = spawn('google-chrome', ['--headless=new', '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${PORT}`,
   '--user-data-dir=/tmp/chrome-satpass', '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
-const problems = []; let ws, nextId = 1; const pending = new Map(); const listeners = [];
+const problems = [], consoleAll = []; let ws, nextId = 1; const pending = new Map(); const listeners = [];
 function send(method, params = {}) { const id = nextId++; ws.send(JSON.stringify({ id, method, params })); return new Promise((res, rej) => pending.set(id, { res, rej, method })); }
 async function ev(expr) {
   const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
@@ -42,6 +42,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
     const msg = JSON.parse(e.data);
     if (msg.id && pending.has(msg.id)) { const p = pending.get(msg.id); pending.delete(msg.id); msg.error ? p.rej(new Error(p.method + ': ' + msg.error.message)) : p.res(msg.result); return; }
     const { method, params } = msg;
+    if (method === 'Runtime.consoleAPICalled') consoleAll.push(params.type + ': ' + params.args.map(a => a.value !== undefined ? String(a.value) : (a.description || '')).join(' '));
     if (method === 'Runtime.consoleAPICalled' && ['error', 'warning', 'assert'].includes(params.type)) problems.push('console.' + params.type + ': ' + params.args.map(a => a.value !== undefined ? a.value : a.description).join(' '));
     if (method === 'Runtime.exceptionThrown') problems.push('exception: ' + (params.exceptionDetails.exception ? params.exceptionDetails.exception.description : params.exceptionDetails.text));
     if (method === 'Log.entryAdded' && params.entry.level === 'error') problems.push('log.error: ' + params.entry.text + ' ' + (params.entry.url || ''));
@@ -363,6 +364,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
       check('passes recomputed after refresh', await ev(`document.querySelectorAll('.pass').length`) >= 3);
     }
   }
+  await require('./browser-sources.js')({ ev, send, check, sleep, go, setVal, waitEvent, problems, consoleAll, LOCAL });
   const onlineProblems = problems.slice();
 
   // ---- stale-TLE warning: shift the page clock +10 days
@@ -386,6 +388,10 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
     check('offline: live tracker works from cached/bundled TLE', (await canvasInk('#map')) > 5000);
     await go('#/doppler/25544'); await sleep(1500);
     check('offline: Doppler works', await ev(`document.querySelectorAll('.dopp-big b').length`) === 2);
+    await go('#/settings'); await sleep(800);
+    check('offline: Setup → Data sources renders and says what to do (import path stays available on Sats tab)', await ev(`!!document.querySelector('#srcCard') && document.querySelectorAll('#srcCard .srcrow').length === 4`) && (await ev(`/import a TLE\/OMM file/i.test(document.querySelector('#srcCard').textContent)`)));
+    await go('#/sats'); await sleep(600);
+    check('offline: Sats tab offers the file import and paste box', await ev(`!!document.querySelector('#fileIn') && !!document.querySelector('#pasteTa')`));
     // SAR + other categories work offline from the precached lazy snapshots (page was reloaded offline, so these come from the service-worker cache)
     await go('#/doppler/39634'); await sleep(2500);
     check('offline: Sentinel-1A radar panel + Doppler from the bundled snapshot', await ev(`/5405 MHz/.test((document.querySelector('#radarCard')||{}).textContent||'') && !!document.querySelector('#rShift')`));

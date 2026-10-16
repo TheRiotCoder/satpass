@@ -1,7 +1,7 @@
 /* SatPass data layer (browser): settings, TLE cache, CelesTrak refresh. */
 (function () {
   "use strict";
-  var Tle = window.SatTle, Radio = window.SatRadio;
+  var Tle = window.SatTle, Radio = window.SatRadio, Src = window.SatSources;
   var LS = "satpass:";
   function load(k, d) { try { var v = localStorage.getItem(LS + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); return true; } catch (e) { return false; } }
@@ -98,7 +98,11 @@
   function saveMeta(id) { if (id && !Cat.BY_ID[id].core) save("catmeta", catMeta); else save("tlemeta", meta); }
   function nextAutoRefreshDue(now) {
     now = now || Date.now();
-    return now - data.fetchedAt > AUTO_REFRESH_MS && now - meta.lastAttempt > FAIL_BACKOFF_MS;
+    if (!(now - data.fetchedAt > AUTO_REFRESH_MS)) return false;
+    return enabledChain().some(function (id) {
+      if (id === "celestrak") return now - meta.lastAttempt > FAIL_BACKOFF_MS && now >= stOf(id).backoffUntil;
+      var st = stOf(id); return readiness(id).ready && !inBackoff(id, now) && now - st.lastOk >= Src.AUTO_MIN_MS[id];
+    });
   }
   // Non-core categories worth refreshing automatically right now: ones the user is using (contain a favourite, or `also`), data older than 24 h, not in back-off.
   function staleCategories(also, now) {
@@ -125,15 +129,14 @@
   // Fetch the queries of the given categories sequentially (polite, 1.2 s apart). opts: {categories:[ids] (default: core), progress(i, n, id)}.
   // Resolves {ok, added, failed:[ids], message}
   var inflight = null;
-  function refresh(opts) {
+  function refreshCelesTrak(opts) {
     opts = opts || {};
-    if (inflight) return inflight;
-    if (typeof navigator !== "undefined" && navigator.onLine === false) return Promise.resolve({ ok: false, message: "You appear to be offline. Using TLEs from " + new Date(data.fetchedAt).toLocaleString() + "." });
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return Promise.resolve({ ok: false, offline: true, kind: "network", message: "You appear to be offline. Using TLEs from " + new Date(data.fetchedAt).toLocaleString() + "." });
     var cats = (opts.categories && opts.categories.length ? opts.categories : Cat.CORE).filter(function (id) { return Cat.BY_ID[id]; });
     var isCore = cats.some(function (id) { return Cat.BY_ID[id].core; });
     var jobs = []; cats.forEach(function (id) { Cat.BY_ID[id].fetch.forEach(function (f) { jobs.push({ cat: id, spec: f }); }); });
     cats.forEach(function (id) { var m = mOf(id); m.lastAttempt = Date.now(); saveMeta(id); });
-    inflight = (async function () {
+    return (async function () {
       var got = [], failed = [], firstErr = null, ids = {}, okCats = {}, failCats = {};
       for (var i = 0; i < jobs.length; i++) {
         var j = jobs[i], spec = j.spec, c = Cat.BY_ID[j.cat];
@@ -149,7 +152,7 @@
       if (!got.length) {
         var msg = firstErr && firstErr.name === "AbortError" ? "CelesTrak took too long to answer." : (firstErr && /Failed to fetch|NetworkError|Load failed/i.test(firstErr.message) ? "Couldn't reach CelesTrak (offline, blocked by a network/ad-blocker, or CORS)." : (firstErr ? firstErr.message : "No data received."));
         cats.forEach(function (id) { mOf(id).lastError = msg; saveMeta(id); });
-        return { ok: false, message: msg + " Using TLEs from " + new Date(data.fetchedAt).toLocaleString() + ". You can also paste TLEs manually (Satellites → Paste TLEs)." };
+        return { ok: false, kind: firstErr && /slow down/.test(firstErr.message) ? "rate" : firstErr && /HTTP \d+/.test(firstErr.message) ? "server" : "network", message: msg + " Using TLEs from " + new Date(data.fetchedAt).toLocaleString() + ". You can also paste TLEs manually (Satellites → Paste TLEs)." };
       }
       var before = data.sats.length, now = Date.now(), merged = Tle.merge(data.sats, got);
       data.sats = merged; data.byId = {}; merged.forEach(function (s) { data.byId[s.norad] = s; });
@@ -161,10 +164,243 @@
         var m = mOf(id); if (okCats[id] || ids[id]) m.lastOk = now; m.lastError = failCats[id] ? "Some queries failed: " + failed.join(", ") : null; saveMeta(id);
       });
       persist(); emit();
-      return { ok: true, added: data.sats.length - before, failed: failed, message: "Updated " + got.length + " element sets from CelesTrak" + (failed.length ? " (failed: " + failed.join(", ") + ")" : "") + "." };
+      return { ok: true, source: "celestrak", added: data.sats.length - before, failed: failed, message: "Updated " + got.length + " element sets from CelesTrak" + (failed.length ? " (failed: " + failed.join(", ") + ")" : "") + "." };
+    })();
+  }
+
+  /* =====================================================================================================================
+     Data sources (v1.2): CelesTrak (direct) + Space-Track / SatNOGS DB / N2YO through the user's own proxy (proxy/worker.js).
+     Order + enable flags + proxy URL live in satpass:sources; credentials ONLY in satpass:creds (this browser, optionally passphrase-encrypted);
+     per-source status/back-off in satpass:srcstatus. Nothing here ever logs a credential and every message is passed through Src.redact().
+     ===================================================================================================================== */
+  var srcCfg = Src.normalizeConfig(load("sources", null));
+  var srcStat = load("srcstatus", {});
+  var limHist = load("srclimit", {});
+  var CRED_KEYS = ["stIdentity", "stPassword", "satnogsToken", "n2yoKey", "proxyToken"];
+  var credVals = {}, credBlob = load("creds", null), credLocked = false, memPass = null;
+  function cleanCreds(o) { var r = {}; CRED_KEYS.forEach(function (k) { if (o && typeof o[k] === "string" && o[k]) r[k] = o[k]; }); return r; }
+  if (credBlob && credBlob.enc) credLocked = true; else credVals = cleanCreds(credBlob);
+  function secretList() { return CRED_KEYS.map(function (k) { return credVals[k]; }).concat([memPass]); }
+  function red(t) { return Src.redact(t, secretList()); }
+  function saveCfg() { save("sources", srcCfg); }
+  function persistCreds() {
+    if (memPass) return Src.encryptCreds(credVals, memPass).then(function (blob) { save("creds", blob); });
+    if (Object.keys(credVals).length) save("creds", credVals); else del("creds");
+    return Promise.resolve();
+  }
+  function getCreds() { return Object.assign({}, credVals); }
+  function clearBlocks(id) { (id ? [id] : Src.IDS).forEach(function (x) { var st = srcStat[x]; if (st) { st.blocked = null; st.fails = 0; st.backoffUntil = 0; } }); save("srcstatus", srcStat); }
+  function setCreds(patch) {
+    CRED_KEYS.forEach(function (k) { if (patch && k in patch) { var v = String(patch[k] == null ? "" : patch[k]).trim(); if (v) credVals[k] = v; else delete credVals[k]; } });
+    clearBlocks(); return persistCreds();
+  }
+  function forgetCreds() { credVals = {}; credBlob = null; credLocked = false; memPass = null; del("creds"); clearBlocks(); emit(); }
+  function lockWithPassphrase(pass) {
+    if (!pass || pass.length < 6) return Promise.reject(Src.SourceError("config", "Use a passphrase of at least 6 characters."));
+    memPass = pass; return persistCreds().then(function () { credBlob = load("creds", null); });
+  }
+  function unlock(pass) {
+    if (!credBlob || !credBlob.enc) return Promise.resolve(true);
+    return Src.decryptCreds(credBlob, pass).then(function (v) { credVals = cleanCreds(v); credLocked = false; memPass = pass; emit(); return true; });
+  }
+  function removePassphrase() { memPass = null; credBlob = null; return persistCreds(); }
+  function setConfig(patch) {
+    var before = JSON.stringify(srcCfg);
+    srcCfg = Src.normalizeConfig(Object.assign({}, srcCfg, patch || {}, patch && patch.enabled ? { enabled: Object.assign({}, srcCfg.enabled, patch.enabled) } : {}));
+    if (JSON.stringify(srcCfg) !== before) { saveCfg(); if (patch && "proxy" in patch) clearBlocks(); }
+    return srcCfg;
+  }
+  function stOf(id) { return srcStat[id] || (srcStat[id] = { lastOk: 0, lastAttempt: 0, lastError: null, lastKind: null, fails: 0, backoffUntil: 0, blocked: null, lastNote: null }); }
+  function noteOk(id, note) { var st = stOf(id), now = Date.now(); st.lastOk = now; st.lastAttempt = now; st.lastError = null; st.lastKind = null; st.fails = 0; st.backoffUntil = 0; st.blocked = null; st.lastNote = note || null; save("srcstatus", srcStat); }
+  function noteFail(id, kind, msg) {
+    var st = stOf(id), now = Date.now(); st.lastAttempt = now; st.lastError = red(msg).slice(0, 240); st.lastKind = kind; st.fails = (st.fails || 0) + 1;
+    st.backoffUntil = now + Src.backoffMs(st.fails, kind);
+    if (kind === "auth" && id !== "celestrak") st.blocked = "auth";   // wrong credentials: never retry automatically until they are changed (Space-Track may lock accounts)
+    save("srcstatus", srcStat);
+  }
+  function inBackoff(id, now) { var st = stOf(id); now = now || Date.now(); return !!st.blocked || now < st.backoffUntil; }
+  function readiness(id) { return Src.readiness(id, srcCfg, credVals, { locked: credLocked }); }
+  function enabledChain() { return srcCfg.order.filter(function (id) { return srcCfg.enabled[id]; }); }
+
+  // one HTTP request to the proxy (or direct for health), with local rate limiting, timeout and error classification
+  function srcFetch(id, op, args, parse, opts) {
+    opts = opts || {};
+    var rd = readiness(id); if (!rd.ready) return Promise.reject(Src.SourceError(rd.kind || "config", rd.reason));
+    var now = Date.now(), lim = Src.limitCheck(limHist, id, op, now);
+    if (!lim.ok) return Promise.reject(Src.SourceError("rate", "Local rate limit for " + Src.META[id].label + ": wait " + Math.ceil(lim.waitMs / 60000) + " min (SatPass stays below the published limits)."));
+    var req; try { req = Src.buildRequest(id, op, args, srcCfg, credVals); } catch (e) { return Promise.reject(e); }
+    limHist = Src.limitRecord(limHist, id, op, now); save("srclimit", limHist);
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null, timer = ctrl && setTimeout(function () { ctrl.abort(); }, 30000);
+    var init = Object.assign({}, req.init, ctrl ? { signal: ctrl.signal } : {});
+    return fetch(req.url, init).then(function (r) {
+      if (timer) clearTimeout(timer);
+      var hk = r.headers && r.headers.get ? r.headers.get("X-SatPass-Error") : null;
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          var m = ""; try { m = JSON.parse(t).error || ""; } catch (e) {}
+          throw Src.SourceError(Src.classifyHttp(r.status, hk), red(m || ("HTTP " + r.status + " from the proxy")), r.status);
+        });
+      }
+      return r.text().then(function (t) { return { text: t, cache: r.headers && r.headers.get ? r.headers.get("X-SatPass-Cache") : null }; });
+    }, function (e) {
+      if (timer) clearTimeout(timer);
+      throw Src.SourceError("network", e && e.name === "AbortError" ? Src.META[id].label + " (via your proxy) took too long to answer." : "Could not reach your proxy at " + red(srcCfg.proxy) + " (offline, wrong URL, or blocked).");
+    }).then(function (res) {
+      if (opts.raw) return res; try { return parse(res.text, res); } catch (e) { if (e && e.name === "SourceError") throw e; throw Src.SourceError("parse", red(e && e.message)); }
+    });
+  }
+
+  // element sets for `ids` from a proxied source -> {sats, note}
+  async function pullFromSource(id, ids, progress) {
+    var got = [], errs = [], note = null, n;
+    if (id === "spacetrack") {
+      var chunks = Src.chunk(ids, Src.ST_CHUNK);
+      for (var i = 0; i < chunks.length; i++) {
+        if (progress) progress(i, chunks.length, id);
+        var r = await srcFetch(id, "gp", { ids: chunks[i] }, function (t) { return Src.parseSpaceTrackGp(t); }); got = got.concat(r.sats); errs = errs.concat(r.errors);
+        if (i < chunks.length - 1) await sleep(2000);
+      }
+    } else if (id === "satnogs") {
+      var want = ids.filter(function (x) { return x < 100000; });
+      if (progress) progress(0, 1, id);
+      var rs = await srcFetch(id, "tle", { ids: want.length <= 400 ? want : null }, function (t) { return Src.parseSatnogsTle(t, want); }); got = rs.sats; errs = rs.errors;
+    } else if (id === "n2yo") {
+      var favs = settings.favs, curated = Radio.CURATED.map(function (c) { return c.norad; }), order = [], seen = {};
+      favs.concat(curated).concat(ids).forEach(function (x) { if (ids.indexOf(x) >= 0 && !seen[x]) { seen[x] = 1; order.push(x); } });
+      var take = order.slice(0, Src.N2YO_MAX_SATS); note = take.length < ids.length ? "N2YO is per-satellite: updated " + take.length + " of " + ids.length + " (favourites first)." : null;
+      for (n = 0; n < take.length; n++) {
+        if (progress) progress(n, take.length, id);
+        try { var one = await srcFetch(id, "tle", { id: take[n] }, function (t) { return Src.parseN2yoTle(t); }); got = got.concat(one.sats); if (one.transactions != null) stOf(id).quota = { transactions: one.transactions, at: Date.now() }; }
+        catch (e) { if (e.kind !== "parse") { if (!got.length) throw e; note = (note ? note + " " : "") + "Stopped after " + got.length + " (" + e.message + ")"; break; } errs.push(e.message); }
+        if (n < take.length - 1) await sleep(1200);
+      }
+    }
+    if (!got.length) throw Src.SourceError("parse", errs[0] ? red(errs[0]) : "no element sets in the answer");
+    return { sats: got, note: note };
+  }
+  async function refreshFromSource(id, cats, opts) {
+    var idset = {}; cats.forEach(function (c) { members(c).forEach(function (x) { idset[x] = 1; }); }); settings.favs.forEach(function (x) { if (data.byId[x]) idset[x] = 1; });
+    var ids = Object.keys(idset).map(Number).sort(function (a, b) { return a - b; });
+    if (!ids.length) throw Src.SourceError("config", "No satellites to refresh.");
+    var r = await pullFromSource(id, ids, opts.progress), before = data.sats.length, now = Date.now(), prevEpoch = {};
+    data.sats.forEach(function (x) { prevEpoch[x.norad] = x.epochMs; });
+    var newer = r.sats.filter(function (x) { return !(prevEpoch[x.norad] >= x.epochMs); }).length;
+    var merged = Tle.merge(data.sats, r.sats); data.sats = merged; data.byId = {}; merged.forEach(function (x) { data.byId[x.norad] = x; });
+    var label = Src.META[id].label + " (via proxy)";
+    if (cats.some(function (c) { return Cat.BY_ID[c].core; })) { data.fetchedAt = now; data.source = label; data.origin = label; }
+    cats.forEach(function (c) { data.catInfo[c] = { fetchedAt: now, origin: label }; var m = mOf(c); m.lastOk = now; m.lastError = null; saveMeta(c); });
+    persist(); emit();
+    return { ok: true, source: id, added: data.sats.length - before, updated: newer, message: "Updated " + r.sats.length + " element sets from " + Src.META[id].label + " (" + newer + " newer than what you had)." + (r.note ? " " + r.note : "") };
+  }
+  /* The public refresh: try the enabled sources in the configured order; the first that delivers wins. Failures are recorded per source
+     (exponential back-off, credential errors block until the credentials change) and summarised, e.g. "CelesTrak unreachable — using Space-Track". */
+  function refresh(opts) {
+    opts = opts || {};
+    if (inflight) return inflight;
+    var cats = (opts.categories && opts.categories.length ? opts.categories : Cat.CORE).filter(function (id) { return Cat.BY_ID[id]; });
+    inflight = (async function () {
+      var failed = [], first = null, now = Date.now();
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return { ok: false, offline: true, message: "You appear to be offline. Using TLEs from " + new Date(data.fetchedAt).toLocaleString() + "." };
+      cats.forEach(function (c) { var m = mOf(c); m.lastAttempt = now; saveMeta(c); });
+      var chain = enabledChain(), tried = 0;
+      for (var i = 0; i < chain.length; i++) {
+        var id = chain[i], st = stOf(id), rd = readiness(id);
+        if (!rd.ready) { failed.push({ id: id, kind: rd.kind || "config", skipped: true, reason: rd.reason }); continue; }
+        if (opts.auto && inBackoff(id, now)) { failed.push({ id: id, kind: st.lastKind || "network", skipped: true, reason: "backing off" }); continue; }
+        if (id !== "celestrak" && st.blocked === "auth") { failed.push({ id: id, kind: "auth", skipped: true, reason: "credentials were rejected – fix them in Setup → Data sources" }); continue; }
+        if (id !== "celestrak" && opts.auto && now - st.lastOk < Src.AUTO_MIN_MS[id]) { failed.push({ id: id, kind: "rate", skipped: true, reason: "refreshed recently" }); continue; }
+        if (id === "spacetrack" && opts.auto && Src.avoidBusyMinute(now)) { failed.push({ id: id, kind: "rate", skipped: true, reason: "waiting for a quiet minute (Space-Track asks scripts to avoid :00 and :30)" }); continue; }
+        if (id !== "celestrak" && !opts.auto && now - st.lastOk < Src.MIN_PULL_MS[id] && st.lastOk && !opts.force && cats.every(function (c) { return catStatus(c).fetchedAt >= st.lastOk - 1; })) { failed.push({ id: id, kind: "rate", skipped: true, reason: "pulled less than " + Src.MIN_PULL_MS[id] / 3600e3 + " h ago (" + Src.META[id].label + " asks for no more)" }); continue; }
+        tried++;
+        try {
+          var r;
+          if (id === "celestrak") { r = await refreshCelesTrak(opts); if (!r.ok) { var ce = Src.SourceError(r.kind || "network", r.message); ce.offline = !!r.offline; throw ce; } }
+          else r = await refreshFromSource(id, cats, opts);
+          noteOk(id, r.message);
+          var failedReal = failed.filter(function (f) { return !f.skipped || f.kind !== "config"; });
+          return Object.assign({}, r, { source: id, fallbackFrom: failedReal.map(function (f) { return f.id; }), message: (failedReal.length ? Src.fallbackMessage(failedReal, id) + ". " : "") + r.message });
+        } catch (e) {
+          var kind = e && e.kind || "network"; if (!first) first = e;
+          if (e && e.offline) return { ok: false, offline: true, message: e.message };
+          noteFail(id, kind, e.message || ""); failed.push({ id: id, kind: kind, message: red(e.message || "") });
+        }
+      }
+      var real = failed.filter(function (f) { return !f.skipped; }), hint = "";
+      var unconfigured = Src.IDS.filter(function (x) { return !srcCfg.enabled[x] || !readiness(x).ready; }).filter(function (x) { return x !== "celestrak"; });
+      var skips = failed.filter(function (f) { return f.skipped && f.kind !== "config"; });
+      if (tried && skips.length) hint = " Skipped: " + skips.map(function (f) { return Src.META[f.id].label + " – " + f.reason; }).join("; ") + ".";
+      if (!tried) hint = chain.length ? " Nothing was tried: " + failed.map(function (f) { return Src.META[f.id].label + " – " + f.reason; }).join("; ") + "." : " No data source is enabled (Setup → Data sources).";
+      var base = first ? first.message : "";
+      return { ok: false, allFailed: true, kind: first && first.kind, failed: failed.map(function (f) { return f.id; }),
+        message: (real.length > 1 ? Src.fallbackMessage(real, null) + ". " : "") + base + hint + (unconfigured.length ? " Other sources (" + unconfigured.map(function (x) { return Src.META[x].label; }).join(", ") + ") are not set up – see Setup → Data sources, or import a TLE/OMM file." : " You can import a TLE/OMM file or paste TLEs on the Sats tab.") };
     })().then(function (r) { inflight = null; return r; }, function (e) { inflight = null; throw e; });
     return inflight;
   }
+  // "Test connection": one real request per source (CelesTrak: tiny GP query), result also recorded in the status line
+  function testSource(id) {
+    var iss = 25544;
+    function done(ok, msg, kind) { if (ok) noteOk(id, msg); else noteFail(id, kind || "network", msg); emit(); return { ok: ok, message: red(msg), kind: kind }; }
+    if (id === "celestrak") {
+      return fetchText(Cat.BASE + "CATNR=" + iss + "&FORMAT=json").then(function (t) { var p; try { p = parseResponse(t, "json"); } catch (e) { return done(false, "CelesTrak answered, but not with element-set data (a login/captive-portal page or a block page?).", "parse"); } return p.sats.length ? done(true, "CelesTrak reachable – ISS element set epoch " + new Date(p.sats[0].epochMs).toISOString().slice(0, 16).replace("T", " ") + " UTC.") : done(false, "CelesTrak answered but sent no element set.", "parse"); },
+        function (e) { return done(false, /slow down/.test(e.message) ? e.message : "Couldn't reach CelesTrak (" + (e.name === "AbortError" ? "timeout" : "network, blocked or HTTP error") + ").", /slow down/.test(e.message) ? "rate" : "network"); });
+    }
+    var rd = readiness(id); if (!rd.ready) return Promise.resolve(done(false, rd.reason, rd.kind || "config"));
+    return srcFetch(id, "health", {}, function (t) { var o = JSON.parse(t); if (!o || !o.ok) throw Src.SourceError("parse", "Not a SatPass proxy (answer to /health was unexpected)."); return o; })
+      .then(function (h) {
+        if (id === "spacetrack") return srcFetch(id, "gp", { ids: [iss] }, function (t) { return Src.parseSpaceTrackGp(t); });
+        if (id === "satnogs") return srcFetch(id, "tle", { ids: [iss] }, function (t) { return Src.parseSatnogsTle(t, [iss]); });
+        return srcFetch(id, "tle", { id: iss }, function (t) { return Src.parseN2yoTle(t); });
+      })
+      .then(function (r) {
+        if (!r.sats.length) return done(false, Src.META[id].label + " answered but had no element set for the ISS.", "parse");
+        var q = r.transactions != null ? " N2YO reports " + r.transactions + " transaction(s) in the last 60 min (free tier: 1000 TLE/h)." : "";
+        if (r.transactions != null) stOf(id).quota = { transactions: r.transactions, at: Date.now() };
+        return done(true, Src.META[id].label + " OK via your proxy – ISS element set, epoch " + new Date(r.sats[0].epochMs).toISOString().slice(0, 16).replace("T", " ") + " UTC." + q);
+      }, function (e) { return done(false, e.message, e.kind || "network"); });
+  }
+
+  /* ---------- SatNOGS live transmitters (optional; never replaces the bundled table, only adds labelled entries) ---------- */
+  var txLive = load("txlive", null);
+  function fetchTransmitters(opts) {
+    opts = opts || {};
+    var st = stOf("satnogs");
+    if (!opts.force && txLive && Date.now() - txLive.fetchedAt < 3600e3) return Promise.resolve({ ok: false, message: "Transmitters were fetched " + Math.round((Date.now() - txLive.fetchedAt) / 60000) + " min ago; SatNOGS data changes slowly – try again in an hour." });
+    var ids = Object.keys(Radio.RADIO).map(Number).filter(function (n) { return Radio.RADIO[n].length; });
+    return srcFetch("satnogs", "transmitters", { ids: ids.slice(0, 30) }, function (t) { return Src.parseSatnogsTransmitters(t); }).then(function (by) {
+      var extra = ids.slice(30), chain = Promise.resolve(by);
+      if (extra.length) chain = srcFetch("satnogs", "transmitters", { ids: extra.slice(0, 30) }, function (t) { return Src.parseSatnogsTransmitters(t); }).then(function (b2) { return Object.assign(by, b2); });
+      return chain;
+    }).then(function (by) {
+      txLive = { fetchedAt: Date.now(), source: "SatNOGS DB", bySat: by }; save("txlive", txLive); noteOk("satnogs", "transmitters fetched"); emit();
+      var n = 0; Object.keys(by).forEach(function (k) { n += by[k].length; });
+      return { ok: true, satellites: Object.keys(by).length, transmitters: n, message: "Fetched " + n + " active transmitters for " + Object.keys(by).length + " satellites from SatNOGS DB." };
+    }, function (e) { noteFail("satnogs", e.kind || "network", e.message); return { ok: false, message: red(e.message), kind: e.kind }; });
+  }
+  function liveTx(norad) { return txLive && txLive.bySat && txLive.bySat[norad] ? txLive.bySat[norad] : []; }
+  function liveRadios(norad) { return liveTx(norad).map(function (t) { return Src.txToRadio(t, txLive.fetchedAt); }); }
+  function txInfo() { return txLive ? { fetchedAt: txLive.fetchedAt, satellites: Object.keys(txLive.bySat || {}).length } : null; }
+  function clearLiveTx() { txLive = null; del("txlive"); emit(); }
+  function txCompare() {   // bundled nominal table vs live SatNOGS list, per satellite
+    var out = {}; if (!txLive) return out;
+    Object.keys(Radio.RADIO).forEach(function (k) { out[k] = Src.compareNominal(Radio.RADIO[k], liveTx(Number(k))); });
+    return out;
+  }
+
+  /* ---------- N2YO radio passes for the validation view (cached 30 min, quota-aware) ---------- */
+  var n2cache = load("n2yocache", {});
+  function n2yoPasses(norad, obs, opts) {
+    opts = opts || {};
+    var days = opts.days || 2, key = [norad, Number(obs.lat).toFixed(2), Number(obs.lon).toFixed(2), Math.round(obs.alt || 0), days, opts.minEl || 0].join("|"), now = Date.now(), c = n2cache[key];
+    if (c && now - c.t < 30 * 60e3 && !opts.force) return Promise.resolve({ ok: true, cached: true, ageMs: now - c.t, passes: c.passes, transactions: c.transactions, satname: c.satname });
+    return srcFetch("n2yo", "radiopasses", { id: norad, lat: obs.lat, lng: obs.lon, alt: obs.alt || 0, days: days, minEl: opts.minEl || 0 }, function (t) { return Src.parseN2yoPasses(t); }).then(function (r) {
+      var keys = Object.keys(n2cache); if (keys.length > 12) delete n2cache[keys.sort(function (a, b) { return n2cache[a].t - n2cache[b].t; })[0]];
+      n2cache[key] = { t: now, passes: r.passes, transactions: r.transactions, satname: r.satname }; save("n2yocache", n2cache);
+      if (r.transactions != null) stOf("n2yo").quota = { transactions: r.transactions, at: now };
+      noteOk("n2yo", "radiopasses"); return { ok: true, cached: false, passes: r.passes, transactions: r.transactions, satname: r.satname };
+    }, function (e) { if (e.kind === "auth" || e.kind === "network") noteFail("n2yo", e.kind, e.message); return { ok: false, kind: e.kind, message: red(e.message) }; });
+  }
+  function n2yoUsage() { return Src.limitUsed(limHist, "n2yo", "radiopasses", Date.now()); }
+
   /* On-demand lookup of one name / NORAD id (e.g. a single Starlink). Guarded by SatCatalog.lookupCheck and capped at MAX_LOOKUP_RESULTS. */
   var lookupMeta = load("lookupmeta", { last: 0 }), lookups = load("lookups", []);
   function lookup(text) {
@@ -186,10 +422,12 @@
   }
   function searched() { return lookups.filter(function (n) { return data.byId[n]; }); }
   // manual paste fallback
-  function importText(text) {
-    var p = Tle.parse(text);
+  function importText(text, label) {
+    text = String(text || ""); var t = text.trim(), p;
+    if (/^[\[{]/.test(t)) { try { p = Src.parseSpaceTrackGp(t); } catch (e) { return { ok: false, message: red(e.message) }; } }   // OMM/GP JSON (Space-Track, CelesTrak, SatNOGS-converted)
+    else p = Tle.parse(text);
     if (!p.sats.length) return { ok: false, message: p.errors[0] || "No valid TLEs found" };
-    setSats(Tle.merge(data.sats, p.sats), Math.max(data.fetchedAt, Date.now()), "Pasted by user", "pasted");
+    setSats(Tle.merge(data.sats, p.sats), Math.max(data.fetchedAt, Date.now()), label || "Pasted by user", label ? "imported file" : "pasted");
     persist(); emit();
     return { ok: true, message: "Imported " + p.sats.length + " element set(s)" + (p.errors.length ? "; " + p.errors.length + " skipped" : "") + "." };
   }
@@ -201,6 +439,10 @@
     data: data, init: init, refresh: refresh, importText: importText, onChange: onChange, nextAutoRefreshDue: nextAutoRefreshDue, manualAllowed: manualAllowed,
     ensure: ensure, ensureAll: ensureAll, allLoaded: allLoaded, members: members, categoriesOf: categoriesOf, catStatus: catStatus, staleCategories: staleCategories,
     lookup: lookup, searched: searched,
+    sources: { META: Src.META, config: function () { return JSON.parse(JSON.stringify(srcCfg)); }, setConfig: setConfig, chain: enabledChain, readiness: readiness, status: function (id) { return Object.assign({}, stOf(id)); },
+      inBackoff: inBackoff, getCreds: getCreds, setCreds: setCreds, forgetCreds: forgetCreds, isLocked: function () { return credLocked; }, hasPassphrase: function () { return !!(credBlob && credBlob.enc) || !!memPass; },
+      lock: lockWithPassphrase, unlock: unlock, removePassphrase: removePassphrase, test: testSource, usage: function (id, op) { return Src.limitUsed(limHist, id, op, Date.now()); }, n2yoUsage: n2yoUsage },
+    fetchTransmitters: fetchTransmitters, liveTx: liveTx, liveRadios: liveRadios, txInfo: txInfo, clearLiveTx: clearLiveTx, txCompare: txCompare, n2yoPasses: n2yoPasses,
     lastError: lastError, lastOk: lastOk, load: load, save: save, del: del,
     constants: { AUTO_REFRESH_MS: AUTO_REFRESH_MS, CAT_AUTO_MS: CAT_AUTO_MS, MIN_MANUAL_MS: MIN_MANUAL_MS, FAIL_BACKOFF_MS: FAIL_BACKOFF_MS }, SOURCES: SOURCES
   };

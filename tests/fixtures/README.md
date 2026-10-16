@@ -1,0 +1,6 @@
+Fixtures for the data-source adapters (tests/sources.test.js, tests/proxy.test.js):
+
+- `satnogs-tle.json`, `satnogs-tx-*.json`: REAL, unauthenticated responses from https://db.satnogs.org/api/tle/ and /api/transmitters/ (fetched 2026-10-16; subsets of the list, entries unmodified).
+- `spacetrack-gp.json`: CONSTRUCTED test fixture in the shape of Space-Track's documented GP-class JSON (field names and all-string values per https://www.space-track.org/documentation). It is **not** a Space-Track download and not Space-Track's distribution: no Space-Track account was available, so three public element sets (ISS and AO-91 from the SatNOGS TLE feed, an Alpha-5-range object from CelesTrak's OMM) were re-expressed in that shape purely to exercise the parser. For NORAD ids > 99999 Space-Track documents that TLE lines are not available, so TLE_LINE0-2 are empty there. Verify against a real response with your own account (see README, "Verify with your own credentials").
+- `n2yo-*.json`: the request/response examples printed verbatim in the official N2YO API docs (https://api.n2yo.com/), plus the two error bodies observed live (`{"error":"No API Key provided"}`, `{"error":"Invalid API Key!"}`; both come with HTTP 200).
+- `omm-*.json`, `tle-*.txt`: CelesTrak OMM / TLE (see earlier releases).

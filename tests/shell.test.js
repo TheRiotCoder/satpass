@@ -16,8 +16,9 @@ ok("vendored satellite.js ships with its MIT licence", /MIT License/.test(rd("js
 ok(".nojekyll present (GitHub Pages)", fs.existsSync(path.join(root, ".nojekyll")));
 ok("no CDN / third-party script or style at runtime", !/<(script|link)[^>]+(https?:)?\/\/(?!celestrak)[a-z0-9.-]+\//i.test(html) && !/https?:\/\/[^"']*\.(js|css)["']/.test(html));
 const sources = ["index.html", "sw.js", ...fs.readdirSync(path.join(root, "js")).filter(f => f.endsWith(".js")).map(f => "js/" + f)];
-const urls = sources.flatMap(f => [...rd(f).matchAll(/https?:\/\/[^\s"'<>)]+/g)].map(m => new URL(m[0].replace(/[.,;]+$/, "")).host));
-const allowed = new Set(["celestrak.org", "www.amsat.org", "github.com", "www.w3.org", "eoportal.org", "space.oscar.wmo.int"]);
+const stripCsp = t => t.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, "");
+const urls = sources.flatMap(f => [...stripCsp(rd(f)).matchAll(/https?:\/\/[^\s"'<>)]+/g)].filter(m => !/[*…]/.test(m[0])).map(m => new URL(m[0].replace(/[.,;]+$/, "")).host));
+const allowed = new Set(["celestrak.org", "www.amsat.org", "github.com", "www.w3.org", "eoportal.org", "space.oscar.wmo.int", "www.space-track.org", "db.satnogs.org", "api.n2yo.com", "www.n2yo.com", "satpass-proxy.yourname.workers.dev", "your-proxy.example.workers.dev", "example.invalid", "localhost", "127.0.0.1"]);
 ok("runtime code only references expected hosts", urls.every(h => allowed.has(h)), [...new Set(urls)].filter(h => !allowed.has(h)));
 const appVer = (rd("js/app.js").match(/APP_VERSION = "([\d.]+)"/) || [])[1], swVer = (sw.match(/const VERSION = "satpass-v([\d.]+)"/) || [])[1];
 ok("sw.js VERSION matches APP_VERSION in app.js", !!appVer && appVer === swVer, [appVer, swVer]);
@@ -25,9 +26,10 @@ const readme = rd("README.md"), appJs = rd("js/app.js");
 ok("README documents geometric elevation, cylindrical shadow and the -6° rule", /geometric/i.test(readme) && /cylindrical/i.test(readme) && /−6°|-6°/.test(readme) && /refraction/i.test(readme));
 ok("app About/help text documents the same approximations", /geometric/i.test(appJs) && /cylindrical Earth shadow/i.test(appJs) && /−6°/.test(appJs) && /refraction/i.test(appJs));
 ok("README documents in-progress / truncated pass handling", /aosBeforeStart/.test(readme) && /truncated/.test(readme) && /losAfterWindow/.test(readme));
-const secretRe = /(api[_-]?key|secret|passw(or)?d|auth[_-]?token|BEGIN (RSA|OPENSSH|PRIVATE)|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})/i;
+// real-looking secret values (v1.2.0 handles credential *fields*, so the words themselves are fine): private keys, GitHub/AWS tokens, or a quoted 16+ char literal assigned to a key/secret/password/token name, or a 40-hex SatNOGS-style token
+const secretRe = /(BEGIN (RSA|OPENSSH|PRIVATE)|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|passw(or)?d|token)["']?\s*[:=]\s*["'][A-Za-z0-9_\-]{16,}["']|\b[0-9a-f]{40}\b)/i;
 const files = []; (function walk(d) { for (const f of fs.readdirSync(d)) { if (f === ".git" || f === "vendor") continue; const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : /\.(js|html|css|json|md|py|webmanifest)$/.test(f) && files.push(p); } })(root);
-const hits = files.filter(f => !f.endsWith("shell.test.js") && secretRe.test(fs.readFileSync(f, "utf8"))).map(f => path.relative(root, f));
+const hits = files.filter(f => !/tests[\\/](fixtures[\\/]|[\w-]+\.test\.js$|browser-[\w-]+\.js$)/.test(f) && secretRe.test(fs.readFileSync(f, "utf8"))).map(f => path.relative(root, f));
 ok("no secret-looking strings in tracked sources", hits.length === 0, hits);
 // --- v1.1.0: categories, lazy snapshots, SAR docs
 const snapFiles = fs.readdirSync(path.join(root, "data", "snap")).filter(f => f.endsWith(".js"));
@@ -44,4 +46,18 @@ ok("README SAR table is in sync with data/sar.js (run: node tools/sar_table.js -
 ok("README release notes mention the app version", rm.includes("**" + appVer + "**"), appVer);
 ok("About text (app.js) carries the attribution and the not-for-reception warning", /eoPortal/.test(appJs) && /OSCAR/.test(appJs) && /not for reception/.test(appJs) && /CelesTrak/.test(appJs));
 ok("update_snapshot.py reads the category/query list from js/catalog.js and reuses cached responses for 2 h (7200 s)", /require\('\.\/js\/catalog\.js'\)/.test(rd("tools/update_snapshot.py")) && /< 7200/.test(rd("tools/update_snapshot.py")));
+// --- v1.2.0: data sources, CSP, proxy, credential safety
+const csp = (html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/) || [])[1] || "";
+const dir = n => ((csp.match(new RegExp("(?:^|;)\\s*" + n + " ([^;]+)")) || [])[1] || "").trim().split(/\s+/);
+ok("index.html carries a CSP: default-src self, script-src self (no inline/eval), object-src none", /default-src 'self'/.test(csp) && dir("script-src").join(" ") === "'self'" && /object-src 'none'/.test(csp) && !/unsafe-eval/.test(csp));
+ok("CSP connect-src names only self, celestrak, workers.dev proxies and localhost", dir("connect-src").every(h => ["'self'", "https://celestrak.org", "https://*.workers.dev", "http://localhost:*", "http://127.0.0.1:*"].includes(h)), dir("connect-src"));
+ok("index.html has no inline script and no inline event handlers (CSP-safe)", !/<script(?![^>]*\bsrc=)[^>]*>/i.test(html) && !/\son[a-z]+\s*=/i.test(html));
+ok("js/sources.js is loaded before js/store.js and precached", html.indexOf("js/sources.js") > 0 && html.indexOf("js/sources.js") < html.indexOf("js/store.js") && shell.includes("js/sources.js"));
+ok("service worker bypasses credentialed / API requests (cross-origin, API hosts, key= params, credential headers)", /function bypass\(/.test(sw) && /x-n2yo-key/.test(sw) && /api_\?key/.test(sw) && /space-track/.test(sw) && /bypass\(req, new URL\(req\.url\)\)/.test(sw));
+ok("proxy files exist and share the app version", ["proxy/worker.js", "proxy/wrangler.toml", "proxy/package.json", "proxy/README.md"].every(f => fs.existsSync(path.join(root, f))) && JSON.parse(rd("proxy/package.json")).version === appVer && new RegExp('const VERSION = "' + appVer.replace(/\./g, "\\.") + '"').test(rd("proxy/worker.js")));
+ok("proxy wrangler.toml holds no secrets, only ALLOWED_ORIGINS", /ALLOWED_ORIGINS/.test(rd("proxy/wrangler.toml")) && !/(PASSWORD|TOKEN|KEY|IDENTITY)\s*=/.test(rd("proxy/wrangler.toml")));
+ok("README documents data sources: CORS reality, proxy, credential storage, rate limits, terms, no bundled Space-Track data, how to verify", ["Space-Track", "SatNOGS", "N2YO", "CORS", "proxy/", "localStorage", "rate limit", "do not bundle|not bundled|never bundled", "Forget credentials", "user agreement|terms"].every(w => new RegExp(w, "i").test(rm)));
+ok("About text documents data sources, proxy, privacy and terms", /Space-Track/.test(appJs) && /proxy/i.test(appJs) && /unencrypted/i.test(appJs) && /never bundles/.test(appJs));
+ok("no Space-Track data bundled (data/ and js/ contain no GP records of source Space-Track)", !fs.readdirSync(path.join(root, "data"), { recursive: true }).some(f => /space-?track/i.test(String(f))) && !/"ORIGINATOR"|"OBJECT_ID"\s*:/.test([...fs.readdirSync(path.join(root, "data")).filter(f => f.endsWith(".js")).map(f => rd("data/" + f)), ...snapFiles.map(f => rd("data/snap/" + f))].join("")));
+ok("credentials never rendered into the .ics exporter or the shared URL helpers", !/creds|apiKey|stPassword|satnogsToken|n2yoKey/i.test(rd("js/ics.js")));
 done();

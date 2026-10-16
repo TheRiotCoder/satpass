@@ -1,0 +1,34 @@
+{
+ "info": {
+  "satid": 25544,
+  "satname": "SPACE STATION",
+  "transactionscount": 2,
+  "passescount": 2
+ },
+ "passes": [
+  {
+   "startAz": 311.57,
+   "startAzCompass": "NW",
+   "startUTC": 1521451295,
+   "maxAz": 37.98,
+   "maxAzCompass": "NE",
+   "maxEl": 52.19,
+   "maxUTC": 1521451615,
+   "endAz": 118.6,
+   "endAzCompass": "ESE",
+   "endUTC": 1521451925
+  },
+  {
+   "startAz": 242.34,
+   "startAzCompass": "WSW",
+   "startUTC": 1521600275,
+   "maxAz": 328.03,
+   "maxAzCompass": "NW",
+   "maxEl": 49.59,
+   "maxUTC": 1521600595,
+   "endAz": 47.97,
+   "endAzCompass": "NE",
+   "endUTC": 1521600905
+  }
+ ]
+}

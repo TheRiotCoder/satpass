@@ -1,8 +1,8 @@
 /* SatPass UI. Plain vanilla JS, hash-routed. Pure computation lives in the other modules (grid, doppler, passes, tle, ics, radio, format). */
 (function () {
   "use strict";
-  var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog;
-  var DAY = 86400000, APP_VERSION = "1.1.0";
+  var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
+  var DAY = 86400000, APP_VERSION = "1.2.0";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -90,6 +90,136 @@
   function go(h) { if (location.hash === h) route(); else location.hash = h; }
 
   /* ---------- location card (shared by Passes-empty-state and Setup) ---------- */
+  /* ---------- Setup → Data sources ---------- */
+  function dataSourcesCard() {
+    var el = document.createElement("section"); el.className = "card"; el.id = "srcCard";
+    var SS = S.sources, META = SS.META;
+    function pwField(id, label, key, ph, type) {
+      return '<div class="field"><label for="' + id + '">' + label + '</label><div class="pwrow"><input class="inp" id="' + id + '" type="' + (type || "password") + '" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="' + ph + '" value="' + esc(SS.getCreds()[key] || "") + '" data-key="' + key + '">' +
+        (type === "text" ? "" : '<button type="button" class="btn sm showpw" data-for="' + id + '" aria-pressed="false">Show</button>') + "</div></div>";
+    }
+    function when(t) { return new Date(t).toLocaleString() + " (" + F.age(Date.now() - t) + " ago)"; }
+    function statusText(id) {
+      var cfg = SS.config(), st = SS.status(id), rd = SS.readiness(id), out = [];
+      if (!cfg.enabled[id]) out.push("Disabled – skipped.");
+      else if (!rd.ready) out.push("Not set up: " + rd.reason + ".");
+      if (st.lastOk) out.push("Last success: " + when(st.lastOk) + (st.lastNote ? " – " + st.lastNote : "") + ".");
+      if (st.lastError) out.push("Last problem: " + st.lastError + " (" + new Date(st.lastAttempt).toLocaleTimeString() + ").");
+      if (st.blocked) out.push("Automatic use is paused because the credentials were rejected – change them (or press Test connection) to retry.");
+      else if (SS.inBackoff(id)) out.push("Backing off until " + new Date(st.backoffUntil).toLocaleTimeString() + ".");
+      if (!st.lastOk && !st.lastError && cfg.enabled[id] && rd.ready) out.push("Not used yet.");
+      if (id === "n2yo" && st.quota) out.push("N2YO reports " + st.quota.transactions + " API transactions in the last 60 min (" + new Date(st.quota.at).toLocaleTimeString() + ").");
+      if (id === "spacetrack") out.push("This browser has made " + SS.usage("spacetrack").used + " Space-Track requests in the last hour.");
+      return out.join(" ");
+    }
+    function render() {
+      var cfg = SS.config(), locked = SS.isLocked(), txi = S.txInfo();
+      var rows = cfg.order.map(function (id, i) {
+        var m = META[id], fields = "";
+        if (id === "spacetrack") fields = pwField("stId", "Space-Track user name (your account e-mail)", "stIdentity", "you@example.com", "text") + pwField("stPw", "Space-Track password", "stPassword", "password");
+        if (id === "satnogs") fields = pwField("snToken", "SatNOGS API token", "satnogsToken", "40 hex characters, from your db.satnogs.org profile");
+        if (id === "n2yo") fields = pwField("n2Key", "N2YO API key", "n2yoKey", "from your n2yo.com profile");
+        return '<div class="srcrow" data-id="' + id + '"><div class="srchead"><b>' + (i + 1) + ". " + esc(m.label) + "</b>" +
+          '<label class="sw"><input type="checkbox" class="srcEn" data-id="' + id + '"' + (cfg.enabled[id] ? " checked" : "") + "> use</label>" +
+          '<span class="grow"></span><button type="button" class="btn sm srcUp" data-id="' + id + '" aria-label="Move ' + esc(m.label) + ' up"' + (i === 0 ? " disabled" : "") + '>↑</button><button type="button" class="btn sm srcDn" data-id="' + id + '" aria-label="Move ' + esc(m.label) + ' down"' + (i === cfg.order.length - 1 ? " disabled" : "") + ">↓</button></div>" +
+          '<div class="note srcStatus" data-id="' + id + '">' + esc(statusText(id)) + "</div>" + fields +
+          '<div class="actions"><button type="button" class="btn sm srcTest" data-id="' + id + '">Test connection</button></div><div class="note srcTestMsg" data-id="' + id + '" aria-live="polite"></div>' +
+          '<details class="more"><summary>About ' + esc(m.label) + '</summary><p class="note">' + esc(m.limits) + '. <a class="link" href="' + esc(m.docs || m.site) + '" target="_blank" rel="noopener">Documentation</a></p></details></div>';
+      }).join("");
+      el.innerHTML = "<h2>Data sources</h2>" +
+        '<p class="note">Element sets (TLE/GP) come from the first enabled source that answers. If a source fails (network, blocked, 403/429) SatPass tells you and tries the next one. CelesTrak is the default and needs nothing. <b>If you can\'t get any source working, you can always import a TLE/OMM file or paste TLEs on the Sats tab.</b></p>' +
+        rows +
+        '<h3>Proxy for Space-Track, SatNOGS and N2YO</h3>' +
+        '<div class="banner warn">Browsers are not allowed to read these three services directly (they send no CORS headers – checked from this page\'s own origin). They need a small proxy that <b>you</b> deploy to your own Cloudflare account (free): see <a class="link" href="https://github.com/TheRiotCoder/satpass/tree/main/proxy" target="_blank" rel="noopener">proxy/README</a>. Anything you type below is sent to <i>that proxy only</i>; whoever runs the proxy can see it, so use your own.</div>' +
+        '<div class="field"><label for="srcProxy">Proxy URL (your Cloudflare Worker, https only)</label><input class="inp" id="srcProxy" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://satpass-proxy.yourname.workers.dev" value="' + esc(cfg.proxy) + '"></div><div class="note" id="srcProxyMsg"></div>' +
+        pwField("srcProxyToken", "Proxy access token (recommended – lets the proxy hold your service credentials as Worker secrets)", "proxyToken", "optional") +
+        '<h3>Credentials on this device</h3>' +
+        '<p class="note" id="credNote"></p>' +
+        '<div class="field"><label for="passIn">Passphrase (optional, encrypts the stored credentials with AES-GCM)</label><div class="pwrow"><input class="inp" id="passIn" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="at least 6 characters"><button type="button" class="btn sm showpw" data-for="passIn" aria-pressed="false">Show</button></div></div>' +
+        '<div class="actions"><button type="button" class="btn sm" id="passLock">' + (locked ? "Unlock" : "Encrypt with passphrase") + '</button>' + (SS.hasPassphrase() && !locked ? '<button type="button" class="btn sm" id="passRemove">Remove passphrase</button>' : "") + '<button type="button" class="btn sm danger" id="forgetCreds">Forget credentials</button></div><div class="note" id="passMsg" aria-live="polite"></div>' +
+        '<h3>SatNOGS live transmitters (optional)</h3>' +
+        '<p class="note">Adds SatNOGS DB transmitters (active, alive only) to the Doppler tab <i>below</i> the bundled table. The bundled nominal frequencies stay the default and are never overwritten.' + (txi ? " Currently stored: " + txi.satellites + " satellites, fetched " + when(txi.fetchedAt) + "." : "") + '</p>' +
+        '<div class="actions"><button type="button" class="btn sm" id="txFetch">Fetch live transmitters from SatNOGS</button>' + (txi ? '<button type="button" class="btn sm" id="txClear">Remove live transmitters</button>' : "") + '</div><div class="note" id="txMsg" aria-live="polite"></div><div id="txReport"></div>' +
+        '<details class="more" id="srcPrivacy"><summary>Privacy &amp; rate limits</summary>' +
+        '<p class="note"><b>Privacy.</b> Credentials are stored only in this browser\'s localStorage on this device – <b>unencrypted</b> unless you set a passphrase above (then AES-GCM encrypted; you re-enter the passphrase each session). They are sent only to your own proxy, in request headers (never in URLs, never cached by the service worker, never written to logs or exported .ics files), and the proxy forwards them only to the matching service. SatPass has no server and no analytics. Anyone with access to this browser profile can read unencrypted credentials; a passphrase does not protect against malicious browser extensions or a compromised device. “Forget credentials” deletes them.</p>' +
+        '<p class="note"><b>Rate limits.</b> Space-Track: under 30 requests/minute and 300/hour, and the same GP query at most once an hour – SatPass batches NORAD ids, never asks for the same set more than hourly and stops at 25/min. SatNOGS DB: 60/hour anonymous, 240/hour with a token – SatPass allows itself 40/hour. N2YO free key: 1000/hour for TLE, 100/hour for radio/visual passes, 100/hour for “above” – SatPass allows itself 900 and 90. After any failure SatPass waits (30 min, then longer) before trying that source again automatically; wrong credentials stop automatic use altogether so your account is never hammered.</p>' +
+        '<p class="note"><b>Terms.</b> Space-Track data is for your own use and may not be redistributed (<a class="link" href="https://www.space-track.org/documentation#/user_agree" target="_blank" rel="noopener">user agreement</a>); SatPass keeps it only in this browser. SatNOGS DB data is CC-BY-SA; N2YO data is subject to the <a class="link" href="https://www.n2yo.com/api/" target="_blank" rel="noopener">N2YO API terms</a>.</p></details>';
+      wire();
+    }
+    function refreshStatus() {
+      $$(".srcStatus", el).forEach(function (n) { n.textContent = statusText(n.dataset.id); });
+      var locked = SS.isLocked();
+      $("#credNote", el).textContent = locked ? "🔒 Stored credentials are encrypted – enter your passphrase and press Unlock." : SS.hasPassphrase() ? "🔐 Stored credentials are encrypted with your passphrase (unlocked for this session)." : "Stored unencrypted in this browser only (localStorage on this device).";
+      var pm = $("#srcProxyMsg", el), v = Src.validateProxyUrl(SS.config().proxy), px = SS.config().proxy;
+      pm.textContent = !px ? "" : !v.ok ? "⚠ " + v.reason : !Src.proxyAllowedByCsp(px) ? "⚠ This page's Content-Security-Policy only allows proxies on *.workers.dev (and localhost). Edit index.html to allow another host." : "";
+    }
+    function wire() {
+      refreshStatus();
+      $$(".showpw", el).forEach(function (b) { b.onclick = function () { var i = document.getElementById(b.dataset.for), show = i.type === "password"; i.type = show ? "text" : "password"; b.textContent = show ? "Hide" : "Show"; b.setAttribute("aria-pressed", String(show)); }; });
+      $$("input[data-key]", el).forEach(function (i) { i.onchange = function () { var patch = {}; patch[i.dataset.key] = i.value; SS.setCreds(patch); refreshStatus(); }; });
+      $("#srcProxy", el).onchange = function () { SS.setConfig({ proxy: this.value }); this.value = SS.config().proxy; refreshStatus(); };
+      $$(".srcEn", el).forEach(function (c) { c.onchange = function () { var p = {}; p[c.dataset.id] = c.checked; SS.setConfig({ enabled: p }); refreshStatus(); }; });
+      function move(id, d) { var o = SS.config().order.slice(), i = o.indexOf(id), j = i + d; if (j < 0 || j >= o.length) return; o.splice(i, 1); o.splice(j, 0, id); SS.setConfig({ order: o }); render(); var b = $((d < 0 ? ".srcUp" : ".srcDn") + '[data-id="' + id + '"]', el); if (b && !b.disabled) b.focus(); }
+      $$(".srcUp", el).forEach(function (b) { b.onclick = function () { move(b.dataset.id, -1); }; });
+      $$(".srcDn", el).forEach(function (b) { b.onclick = function () { move(b.dataset.id, 1); }; });
+      $$(".srcTest", el).forEach(function (b) {
+        b.onclick = function () {
+          var id = b.dataset.id, out = $('.srcTestMsg[data-id="' + id + '"]', el);
+          $$("input[data-key]", el).forEach(function (i) { var p = {}; p[i.dataset.key] = i.value; SS.setCreds(p); });   // test what is typed
+          SS.setConfig({ proxy: $("#srcProxy", el).value });
+          b.disabled = true; out.textContent = "Testing…";
+          SS.test(id).then(function (r) { out.textContent = (r.ok ? "✔ " : "✖ ") + r.message; out.className = "note srcTestMsg " + (r.ok ? "okmsg" : "badmsg"); }).then(function () { b.disabled = false; refreshStatus(); });
+        };
+      });
+      $("#passLock", el).onclick = function () {
+        var pw = $("#passIn", el).value, m = $("#passMsg", el);
+        (SS.isLocked() ? SS.unlock(pw) : SS.lock(pw)).then(function () { m.textContent = SS.hasPassphrase() ? "Done – credentials are encrypted on this device." : "Done."; $("#passIn", el).value = ""; render(); }, function (e) { m.textContent = e && e.kind === "config" ? e.message : "Wrong passphrase or unreadable data."; });
+      };
+      var pr = $("#passRemove", el); if (pr) pr.onclick = function () { SS.removePassphrase().then(function () { $("#passMsg", el).textContent = "Passphrase removed – credentials are stored unencrypted again."; render(); }); };
+      $("#forgetCreds", el).onclick = function () { if (!confirm("Delete all stored Space-Track / SatNOGS / N2YO credentials and the proxy access token from this browser?")) return; SS.forgetCreds(); render(); $("#passMsg", el).textContent = "All credentials were deleted from this device."; };
+      $("#txFetch", el).onclick = function () {
+        var b = this, m = $("#txMsg", el); m.textContent = "Fetching…"; b.disabled = true;
+        S.fetchTransmitters().then(function (r) {
+          m.textContent = (r.ok ? "✔ " : "✖ ") + r.message; b.disabled = false; refreshStatus();
+          if (r.ok) { var cmp = S.txCompare(), rows = []; Object.keys(cmp).forEach(function (k) { cmp[k].forEach(function (c) { rows.push('<tr><td>' + esc(nameOf(Number(k))) + " – " + esc(c.label) + "</td><td>" + (c.matched ? "✔ matches" : "⚠ no live match") + "</td><td>" + (c.nearestDeltaHz == null ? "–" : fmt(c.nearestDeltaHz / 1000, 1) + " kHz") + "</td></tr>"); }); });
+            $("#txReport", el).innerHTML = '<div class="tblwrap"><table><thead><tr><th>Bundled entry</th><th>vs SatNOGS</th><th>Nearest Δ</th></tr></thead><tbody>' + rows.join("") + '</tbody></table></div><p class="note">The bundled nominal values are still the default. Live entries appear as separate choices on each Doppler tab.</p>'; }
+        });
+      };
+      var tc = $("#txClear", el); if (tc) tc.onclick = function () { S.clearLiveTx(); render(); };
+    }
+    render();
+    return el;
+  }
+
+  /* ---------- Pass detail: compare with N2YO ---------- */
+  function n2yoCompareUi(n, pass, sat) {
+    var box = $("#n2box"); if (!box) return;
+    var cfg = S.sources.config(), rd = S.sources.readiness("n2yo");
+    if (!cfg.enabled.n2yo || !rd.ready) { box.innerHTML = '<p class="note">Optional: compare this pass with N2YO – set it up in <a class="link" href="#/settings">Setup → Data sources</a>.</p>'; return; }
+    box.innerHTML = '<div class="actions"><button class="btn" id="n2cmp" type="button">Compare with N2YO</button></div><div class="note" id="n2msg" aria-live="polite"></div><div id="n2out"></div>';
+    $("#n2cmp").onclick = function () {
+      var b = this, msg = $("#n2msg"), out = $("#n2out"), now = Date.now();
+      if (pass.los < now) { msg.textContent = "N2YO only predicts upcoming passes; this one is over."; return; }
+      var days = Math.min(10, Math.max(1, Math.ceil((pass.los - now) / DAY))), o = observer();
+      b.disabled = true; msg.textContent = "Asking N2YO (one radiopasses request; free tier is 100/hour)…"; out.innerHTML = "";
+      S.n2yoPasses(n, { lat: S.settings.lat, lon: S.settings.lon, alt: S.settings.alt || 0 }, { days: days, minEl: 0 }).then(function (r) {
+        b.disabled = false;
+        if (!r.ok) { msg.textContent = "✖ " + r.message; return; }
+        var ours = P.findPasses(sat, o, now, now + days * DAY, { minEl: 0 }).filter(function (p) { return p.maxEl >= (S.settings.minEl || 0); });
+        var m = Src.matchPasses(ours, r.passes.filter(function (p) { return p.maxEl >= (S.settings.minEl || 0); })), q = S.sources.n2yoUsage().used;
+        var rows = m.rows.slice(0, 8).map(function (x) {
+          var mine = Math.abs(x.ours.aos - pass.aos) < 5000, a = x.ours, t = x.theirs;
+          function d(v) { return v == null ? "–" : (v > 0 ? "+" : "") + fmt(v, 0) + " s"; }
+          return '<tr' + (mine ? ' class="mine"' : "") + '><td>' + F.clock(a.aos, utc(), true) + "<br>" + F.clock(a.tca, utc(), true) + " (" + fmt(a.maxEl, 0) + "°)<br>" + F.clock(a.los, utc(), true) + "</td><td>" + (t ? F.clock(t.aos, utc(), true) + "<br>" + F.clock(t.tca, utc(), true) + " (" + fmt(t.maxEl, 0) + "°)<br>" + F.clock(t.los, utc(), true) : "not listed by N2YO") + "</td><td>" + (t ? d(x.dAosS) + "<br>" + d(x.dTcaS) + "<br>" + d(x.dLosS) : "–") + "</td></tr>";
+        }).join("");
+        out.innerHTML = '<div class="tblwrap"><table class="cmp"><thead><tr><th>SatPass<br><small>AOS / max / LOS</small></th><th>N2YO<br><small>AOS / max / LOS</small></th><th>Δ SatPass − N2YO</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
+          '<p class="note">' + (r.cached ? "Cached answer from " + F.age(r.ageMs) + " ago (no new request used). " : "") + (r.transactions != null ? "N2YO transactions in the last 60 min: " + r.transactions + " (free key: 100/h for passes). " : "") + "SatPass has sent " + q + " radiopasses requests from this browser in the last hour. " +
+          "Both lists use 0° horizon crossings, so AOS/LOS are comparable; N2YO uses its own element set (" + esc(r.satname || "") + "), so small differences of seconds to a minute are normal. Highlighted row = this pass.</p>" + (m.onlyTheirs.length ? '<p class="note">' + m.onlyTheirs.length + " N2YO pass(es) have no SatPass counterpart in the same window.</p>" : "");
+        msg.textContent = r.cached ? "✔ From cache." : "✔ Done.";
+      });
+    };
+  }
+
   function locationCard(onSaved) {
     var s = S.settings, el = document.createElement("section"); el.className = "card"; el.id = "locCard";
     el.innerHTML = '<h2>Your location</h2>' +
@@ -143,7 +273,7 @@
   /* ---------- TLE status ---------- */
   function dataStatus() {
     var d = S.data, now = Date.now(), age = now - d.fetchedAt, stale = age > Tle.STALE_DAYS * DAY;
-    var src = d.origin === "CelesTrak" ? "CelesTrak (live fetch)" : d.origin === "pasted" ? "your pasted TLEs" : "bundled snapshot (CelesTrak)";
+    var src = d.origin === "CelesTrak" ? "CelesTrak (live fetch)" : d.origin === "pasted" ? "your pasted TLEs" : d.origin === "imported file" ? "an imported file" : /^(Space-Track|SatNOGS|N2YO)/.test(d.origin) ? d.origin + " (live fetch)" : "bundled snapshot (CelesTrak)";
     return { text: "Element sets from " + src + ", fetched " + new Date(d.fetchedAt).toLocaleString() + " (" + F.age(age) + " ago).", stale: stale, age: age };
   }
   function staleList(ids) {
@@ -270,7 +400,7 @@
       '<p class="note">Sky plot: centre = overhead, rim = horizon, N up, E right. <span style="color:#22d3ee">━</span> track, <span style="color:#fbbf24">━</span> visible part (ISS/Tiangong), ticks = time ' + (utc() ? "(UTC)" : "(local)") + ", dashed ring = minimum elevation.</p>" +
       '<div class="actions"><button class="btn" id="icsOne">📅 Add to calendar (.ics)</button><button class="btn" id="remBtn"></button>' +
       (hasRadio ? '<a class="btn" href="#/doppler/' + n + "/" + Math.round(pass.aos) + '">📻 Doppler for this pass</a>' : "") + '<a class="btn" href="#/live/' + n + '">🌍 Live tracker</a></div>' +
-      '<div class="note" id="remMsg"></div></section>' +
+      '<div class="note" id="remMsg"></div><div id="n2box"></div></section>' +
       '<section class="card"><h2>Az / El / Range</h2><div class="toolbar"><span class="muted">Step</span><span class="seg" id="stepSeg">' + [10, 20, 30].map(function (v) { return '<button data-v="' + v + '" class="' + (v === step ? "on" : "") + '">' + v + " s</button>"; }).join("") + '</span></div>' +
       '<div class="note" id="stepNote"></div><div class="tblwrap"><table><thead><tr><th>Time</th><th>Az</th><th></th><th>El</th><th>Range km</th><th>Rate km/s</th></tr></thead><tbody id="tbody"></tbody></table></div></section>' +
       '<p class="disclaimer">Predicted from a TLE ' + F.age(Date.now() - e.epochMs) + " old (epoch " + new Date(e.epochMs).toISOString().slice(0, 16).replace("T", " ") + " UTC). Sat positions drift with TLE age (ISS: roughly 1–3 km/day along-track); treat times as ±several seconds when fresh, ±minutes when old.</p>";
@@ -294,6 +424,7 @@
     else every(15000, view.tick);
     $$("#stepSeg button").forEach(function (b) { b.onclick = function () { step = Number(b.dataset.v); S.save("step", step); $$("#stepSeg button").forEach(function (x) { x.classList.toggle("on", x === b); }); fillTable(); markNow(); }; });
     $("#icsOne").onclick = function () { downloadIcs([pass], "satpass-" + nameOf(n).replace(/[^A-Za-z0-9]+/g, "-") + "-" + F.dateKey(pass.aos, true) + ".ics"); };
+    n2yoCompareUi(n, pass, sat);
     var rb = $("#remBtn");
     function remState() {
       var r = reminders().filter(function (x) { return x.id === remKey; })[0];
@@ -522,15 +653,15 @@
     if (radarInfoOf(n) && entry(n)) { S.save("dopSat", n); return dopplerRadar(a, n); }
     if (radioSats.indexOf(n) < 0) n = 25544;
     S.save("dopSat", n);
-    var radios = R.radios(n), ri = R.pickRadio(n, S.load("dopRadio:" + n, 0)), frac = S.load("dopFrac", 0.5);
+    var nominalRadios = R.radios(n), liveRadios = S.liveRadios(n), radios = nominalRadios.concat(liveRadios), ri = R.pickIndex(radios.length, S.load("dopRadio:" + n, 0)), frac = S.load("dopFrac", 0.5);
     var radio = radios[ri], e = entry(n), sat = satObj(n), token = view.token;
     main.innerHTML = '<div class="banner warn">⚠️ <b>Approximate.</b> ' + esc(R.DISCLAIMER) + " Frequencies, tones and operating modes change; many satellites are off or in safe mode for long periods.</div>" +
       '<div class="toolbar"><select class="inp" id="dSat" aria-label="Satellite">' + dopplerSatOptions(n, radioSats) + "</select>" +
-      (radios.length > 1 ? '<select class="inp" id="dRadio" aria-label="Transponder / mode">' + radios.map(function (r, i) { return '<option value="' + i + '"' + (i === ri ? " selected" : "") + ">" + esc(r.label) + "</option>"; }).join("") + "</select>" : "") + "</div>" +
-      '<section class="card"><h2>' + esc(radio.label) + ' <span class="muted">· ' + esc(radio.mode) + "</span></h2>" +
+      (radios.length > 1 ? '<select class="inp" id="dRadio" aria-label="Transponder / mode">' + (liveRadios.length ? '<optgroup label="Bundled table (nominal, default)">' : "") + radios.map(function (r, i) { return (liveRadios.length && i === nominalRadios.length ? '</optgroup><optgroup label="SatNOGS DB – live, fetched ' + esc(new Date(liveRadios[0].fetchedAt).toLocaleDateString()) + '">' : "") + '<option value="' + i + '"' + (i === ri ? " selected" : "") + ">" + esc(r.label) + "</option>"; }).join("") + (liveRadios.length ? "</optgroup>" : "") + "</select>" : "") + "</div>" +
+      '<section class="card"><h2>' + esc(radio.label) + ' <span class="muted">· ' + esc(radio.mode) + "</span>" + (radio.live ? ' <span class="tag warn">SatNOGS live</span>' : "") + "</h2>" +
       (radio.kind === "linear" ? '<div class="field"><label for="dFrac">Position in the passband: <b id="dFracTxt"></b> <span class="muted">(0 % = lowest downlink frequency)</span></label><input type="range" id="dFrac" class="slider" min="0" max="1000" value="' + Math.round(frac * 1000) + '"></div>' : "") +
       '<div id="dNominal" class="note"></div><div id="dLive"></div>' +
-      '<p class="note">' + esc(radio.note || "") + (radio.tone ? " · CTCSS tone " + radio.tone + " Hz" : "") + "</p></section>" +
+      '<p class="note">' + esc(radio.note || "") + (radio.tone ? " · CTCSS tone " + radio.tone + " Hz" : "") + "</p>" + (liveRadios.length ? "" : (S.sources.readiness("satnogs").ready ? '<p class="note">Optional: <a class="link" href="#/settings">fetch live transmitters from SatNOGS</a> (Setup → Data sources); they are added below the bundled table, never replacing it.</p>' : "")) + "</section>" +
       '<section class="card"><h2>Doppler across a pass</h2><div id="dPassSel"></div><div class="tblwrap" id="dTbl"></div>' +
       '<p class="note">First-order Doppler: Rx = f<sub>down</sub>·(1 − rr/c); to be heard on f<sub>up</sub> you transmit f<sub>up</sub>·(1 + rr/c). rr = range rate (+ receding). Positions use a TLE, so the shift is accurate to ~tens of Hz when the TLE is fresh. Times in ' + F.tzLabel(Date.now(), utc()) + ".</p></section>";
     $("#dSat").onchange = function () { go("#/doppler/" + this.value); };
@@ -591,8 +722,8 @@
     var q = "", mode = S.load("satMode", "curated"), token = view.token, st = dataStatus(), now = Date.now();
     if (!Cat.validMode(mode)) mode = "curated";
     main.innerHTML = '<section class="card"><h2>Orbital data (TLE)</h2><div class="note" style="margin-top:0" id="dsText"></div><div id="dsMsg"></div>' +
-      '<div class="actions"><button class="btn primary" id="refBtn">⟳ Refresh from CelesTrak</button><button class="btn" id="refCatBtn" hidden></button></div><p class="note" id="refNote"></p><p class="note" id="catNote"></p>' +
-      '<details class="more"><summary>Paste TLEs manually</summary><textarea class="inp" id="pasteTa" spellcheck="false" placeholder="ISS (ZARYA)\n1 25544U 98067A   ...\n2 25544  51.6400 ..."></textarea><div class="actions"><button class="btn" id="pasteBtn">Import pasted TLEs</button></div><p class="note">Use this if CelesTrak can\'t be reached from your network. Get TLEs from <a class="link" href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noopener">celestrak.org</a> or <a class="link" href="https://www.amsat.org/tle/current/nasa.all" target="_blank" rel="noopener">AMSAT</a> on another device.</p></details></section>' +
+      '<div class="actions"><button class="btn primary" id="refBtn">⟳ Refresh element sets</button><button class="btn" id="refCatBtn" hidden></button></div><p class="note" id="refNote"></p><p class="note" id="catNote"></p>' +
+      '<details class="more" id="importBox"><summary>Import a TLE / OMM file or paste TLEs</summary><div class="actions"><label class="btn" id="fileLbl" for="fileIn">📂 Import a TLE / OMM file…</label><input type="file" id="fileIn" accept=".txt,.tle,.3le,.json,.xml,.csv,text/plain,application/json" hidden></div><textarea class="inp" id="pasteTa" spellcheck="false" placeholder="ISS (ZARYA)\n1 25544U 98067A   ...\n2 25544  51.6400 ..."></textarea><div class="actions"><button class="btn" id="pasteBtn">Import pasted TLEs</button></div><p class="note">Works with no network and no data source: a TLE/3LE text file, or OMM JSON (e.g. downloaded from your own Space-Track account – SatPass keeps it only in this browser). Get TLEs from <a class="link" href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noopener">celestrak.org</a> or <a class="link" href="https://www.amsat.org/tle/current/nasa.all" target="_blank" rel="noopener">AMSAT</a> on another device.</p></details></section>' +
       '<div class="toolbar"><input class="inp" id="q" type="search" placeholder="Search name, operator or NORAD id" aria-label="Search satellites" autocomplete="off"></div><div class="chips" id="modeSeg" role="group" aria-label="Category"></div><div id="satList"></div>';
     function modeList() {
       var l = [["curated", "Curated", null], ["favs", "★ Favs", S.settings.favs.length]];
@@ -611,12 +742,13 @@
       $("#dsMsg").innerHTML = (d.stale ? '<div class="banner warn">⚠️ Element sets are older than ' + Tle.STALE_DAYS + " days. Predictions degrade quickly with age – refresh when online.</div>" : "") + (le && !refreshing ? '<div class="banner">Last refresh problem: ' + esc(le) + "</div>" : "");
       var allowed = S.manualAllowed(), nxt = lo ? new Date(lo + S.constants.MIN_MANUAL_MS) : null;
       $("#refBtn").disabled = refreshing || (!allowed && lo > 0);
-      $("#refNote").textContent = "Source: CelesTrak GP data (celestrak.org). To respect CelesTrak's rate guidance, SatPass refreshes the core groups (Amateur, Stations, Weather) automatically at most every " + S.constants.AUTO_REFRESH_MS / 3600e3 + " h and manually at most every " + S.constants.MIN_MANUAL_MS / 3600e3 + " h" + (!allowed && nxt ? " (next refresh available " + nxt.toLocaleTimeString() + ")" : "") + ".";
+      var chain = S.sources.chain().map(function (id) { var rd = S.sources.readiness(id); return S.sources.META[id].label + (rd.ready ? "" : " (not set up)"); });
+      $("#refNote").textContent = "Sources, in order (Setup → Data sources): " + (chain.join(" → ") || "none enabled") + ". The first one that answers wins; if it fails the next is tried. CelesTrak is asked at most every " + S.constants.AUTO_REFRESH_MS / 3600e3 + " h automatically (core groups) and manually at most every " + S.constants.MIN_MANUAL_MS / 3600e3 + " h" + (!allowed && nxt ? " (next refresh available " + nxt.toLocaleTimeString() + ")" : "") + "; Space-Track at most hourly per query.";
       var c = curCat(), cb = $("#refCatBtn"), cn = $("#catNote");
       if (c && !c.core) {
         var cs = S.catStatus(c.id), co = S.lastOk(c.id), ok2 = S.manualAllowed(Date.now(), c.id), nx2 = co ? new Date(co + S.constants.MIN_MANUAL_MS) : null;
         cb.hidden = false; cb.disabled = refreshing || (!ok2 && co > 0); if (!refreshing) cb.textContent = "⟳ Refresh " + c.label + " (" + c.fetch.length + " quer" + (c.fetch.length > 1 ? "ies" : "y") + ")";
-        cn.textContent = c.label + " data: " + (cs.origin === "CelesTrak" ? "CelesTrak (live fetch)" : "bundled snapshot") + ", fetched " + (cs.fetchedAt ? new Date(cs.fetchedAt).toLocaleString() + " (" + F.age(Date.now() - cs.fetchedAt) + " ago)" : "—") + ". Fetched only when you open this category and it is older than " + S.constants.CAT_AUTO_MS / 3600e3 + " h (or when you tap refresh)" + (!ok2 && nx2 ? "; next manual refresh " + nx2.toLocaleTimeString() : "") + "." + (S.lastError(c.id) && !refreshing ? " Last problem: " + S.lastError(c.id) : "");
+        cn.textContent = c.label + " data: " + (cs.origin === "bundled snapshot" || cs.origin === "none" ? "bundled snapshot" : cs.origin + " (live fetch)") + ", fetched " + (cs.fetchedAt ? new Date(cs.fetchedAt).toLocaleString() + " (" + F.age(Date.now() - cs.fetchedAt) + " ago)" : "—") + ". Fetched only when you open this category and it is older than " + S.constants.CAT_AUTO_MS / 3600e3 + " h (or when you tap refresh)" + (!ok2 && nx2 ? "; next manual refresh " + nx2.toLocaleTimeString() : "") + "." + (S.lastError(c.id) && !refreshing ? " Last problem: " + S.lastError(c.id) : "");
       } else { cb.hidden = true; cn.textContent = ""; }
     }
     var refreshing = false;
@@ -624,8 +756,9 @@
       if (refreshing) return; refreshing = true; var btn = cats ? $("#refCatBtn") : $("#refBtn"); status(); btn.textContent = "Fetching…";
       S.refresh({ categories: cats, progress: function (i, n, id) { btn.textContent = "Fetching " + (i + 1) + "/" + n + "…"; } }).then(function (r) {
         refreshing = false; if (token !== view.token) { passCache = {}; return; }
-        $("#refBtn").textContent = "⟳ Refresh from CelesTrak"; passCache = {}; chips(); status(); list(); refreshNextBar();
-        $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner ' + (r.ok ? "good" : "bad") + '" id="refResult">' + esc(r.message) + "</div>");
+        $("#refBtn").textContent = "⟳ Refresh element sets"; passCache = {}; chips(); status(); list(); refreshNextBar();
+        $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner ' + (r.ok ? (r.fallbackFrom && r.fallbackFrom.length ? "warn" : "good") : "bad") + '" id="refResult">' + esc(r.message) + (!r.ok && !r.offline ? ' <button class="btn sm" id="goImport" type="button">📂 Import a TLE / OMM file</button> <a class="btn sm" href="#/settings">Data sources</a>' : "") + "</div>");
+        var gi = $("#goImport"); if (gi) gi.onclick = function () { var d = $("#importBox"); d.open = true; d.scrollIntoView({ block: "center" }); };
       });
     }
     $("#refBtn").onclick = function () { doRefresh(null); };
@@ -635,6 +768,11 @@
       var c = curCat(); if (!c || c.core || refreshing || navigator.onLine === false) return;
       if (S.staleCategories(c.id).indexOf(c.id) >= 0 && S.manualAllowed(Date.now(), c.id)) doRefresh([c.id]);
     }
+    $("#fileIn").onchange = function () {
+      var f = this.files && this.files[0]; this.value = ""; if (!f) return;
+      if (f.size > 8e6) { $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner bad">That file is larger than 8 MB – not a TLE/OMM list.</div>'); return; }
+      f.text().then(function (t) { var r = S.importText(t, "file: " + f.name.slice(0, 60)); passCache = {}; status(); list(); refreshNextBar(); $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner ' + (r.ok ? "good" : "bad") + '">' + esc(r.message) + "</div>"); });
+    };
     $("#pasteBtn").onclick = function () {
       var r = S.importText($("#pasteTa").value); passCache = {}; status(); list(); refreshNextBar();
       $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner ' + (r.ok ? "good" : "bad") + '">' + esc(r.message) + "</div>"); if (r.ok) $("#pasteTa").value = "";
@@ -690,6 +828,7 @@
     setTitle("Setup");
     main.innerHTML = "";
     main.appendChild(locationCard(function () {}));
+    main.appendChild(dataSourcesCard());
     var s = S.settings, sec = document.createElement("div");
     sec.innerHTML = '<section class="card"><h2>Time &amp; display</h2><div class="toolbar"><span>Show times in</span><span class="seg" id="tzSeg"><button data-v="local" class="' + (!s.utc ? "on" : "") + '">Local (' + F.tzLabel(Date.now(), false) + ')</button><button data-v="utc" class="' + (s.utc ? "on" : "") + '">UTC</button></span></div>' +
       '<div class="toolbar"><span>Default reminder / calendar alert</span><select class="inp" id="leadSel" style="flex:0 1 130px">' + [2, 5, 10, 15, 30].map(function (m) { return '<option value="' + m + '"' + (m === s.leadMin ? " selected" : "") + ">" + m + " min before</option>"; }).join("") + "</select></div></section>" +
@@ -702,6 +841,7 @@
       "<p><b>Long passes:</b> if a pass is already under way when computed, its true AOS is found by looking back (up to 24 h). A pass still open at the end of the window is followed until it ends (up to 14 h further); if it never ends within that limit it is marked <i>LOS ≥</i> (lower bound).</p>" +
       "<p><b>Frequencies</b> in the Doppler tab are approximate and change; verify with <a class='link' href='https://www.amsat.org/status/' target='_blank' rel='noopener'>AMSAT status</a>.</p>" +
       "<p><b>Categories &amp; SAR:</b> the Sats tab groups satellites into Amateur, Stations, Weather, SAR, Earth observation, Navigation and Science (CelesTrak groups; the SAR list is curated). For SAR satellites the Doppler tab shows the <i>nominal radar carrier</i> (band, centre frequency, bandwidth, polarizations) instead of up/downlinks. <b>These radar frequencies are nominal, informational only and not for reception</b>; values that could not be verified are shown as “not verified”. Sources: agency/operator documents, <a class='link' href='https://eoportal.org' target='_blank' rel='noopener'>ESA eoPortal</a> and <a class='link' href='https://space.oscar.wmo.int' target='_blank' rel='noopener'>WMO OSCAR</a>. The Doppler shown for radar is the <i>one-way carrier Doppler at your position</i>; real SAR processing uses the two-way Doppler centroid with antenna pointing. Starlink and OneWeb are not listed (look up a single one by name in the search box).</p>" +
+      "<p><b>Data sources:</b> CelesTrak is the default and is read straight from your browser. <a class='link' href='https://www.space-track.org' target='_blank' rel='noopener'>Space-Track</a>, <a class='link' href='https://db.satnogs.org' target='_blank' rel='noopener'>SatNOGS DB</a> and <a class='link' href='https://www.n2yo.com/api/' target='_blank' rel='noopener'>N2YO</a> do not allow browsers to read their API (no CORS), so they work only through a small proxy that <i>you</i> deploy (see <code>proxy/</code> in the repository). Credentials you enter are kept only in this browser (unencrypted unless you set a passphrase), sent only to your proxy, and forwarded only to the matching service. Space-Track data is for your own use – SatPass never bundles it; please cite Space-Track/USSPACECOM when you publish results. SatNOGS and N2YO data are credited to their services. SatPass is not affiliated with or endorsed by any of them.</p>" +
       "<p><b>Data:</b> TLEs from <a class='link' href='https://celestrak.org' target='_blank' rel='noopener'>CelesTrak</a> (Dr. T.S. Kelso). Coastlines: Natural Earth (public domain). Not affiliated with CelesTrak, AMSAT or NASA.</p>" +
       '<p>Everything runs on your device; your location is never uploaded.</p></div>' +
       '<div class="actions"><button class="btn" id="resetBtn">Reset favorites &amp; settings</button></div></section>';
@@ -718,7 +858,7 @@
     nb.onclick = function () { ensureNotifPermission().then(function (p) { notifState(); if (p === "granted") notify("SatPass test", "Notifications work while the app is running.", "./#/settings"); }); };
     notifState();
     renderInstallCard();
-    $("#resetBtn").onclick = function () { if (confirm("Reset location, favorites and preferences on this device? (Downloaded TLEs are kept.)")) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("satpass:") === 0 && ["satpass:tle", "satpass:tlemeta", "satpass:groups", "satpass:catmeta", "satpass:lookups", "satpass:lookupmeta"].indexOf(k) < 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (e) {} location.hash = "#/"; location.reload(); } };
+    $("#resetBtn").onclick = function () { if (confirm("Reset location, favorites and preferences on this device? (Downloaded TLEs, data-source settings and stored credentials are kept – use “Forget credentials” in Data sources to remove those.)")) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("satpass:") === 0 && ["satpass:tle", "satpass:tlemeta", "satpass:groups", "satpass:catmeta", "satpass:lookups", "satpass:lookupmeta", "satpass:sources", "satpass:creds", "satpass:srcstatus", "satpass:srclimit", "satpass:txlive", "satpass:n2yocache"].indexOf(k) < 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (e) {} location.hash = "#/"; location.reload(); } };
     if (window.caches) caches.keys().then(function (ks) { var k = ks.filter(function (x) { return x.indexOf("satpass-") === 0; })[0]; if (k && $("#swVer")) $("#swVer").textContent = "· cache " + k; });
   };
 
@@ -764,11 +904,11 @@
   /* ---------- boot ---------- */
   function autoRefresh() {
     if (navigator.onLine === false) return;
-    var core = S.nextAutoRefreshDue() ? S.refresh().then(function (r) { if (r.ok) { passCache = {}; toast("Orbital data updated from CelesTrak"); refreshNextBar(); if ((location.hash || "").indexOf("#/passes") === 0 || !location.hash) route(); } }) : Promise.resolve();
+    var core = S.nextAutoRefreshDue() ? S.refresh({ auto: true }).then(function (r) { if (r.ok) { passCache = {}; toast(r.fallbackFrom && r.fallbackFrom.length ? r.message.split(". ")[0] : "Orbital data updated from " + S.sources.META[r.source || "celestrak"].label); refreshNextBar(); if ((location.hash || "").indexOf("#/passes") === 0 || !location.hash) route(); } }) : Promise.resolve();
     // categories the user actually uses (a favourite in SAR, Earth observation, …) are refreshed at most once a day, one category at a time
     core.then(function () { return S.ensureAll(); }).then(function () {
       var st = S.staleCategories(); if (!st.length) return;
-      return S.refresh({ categories: st }).then(function (r) { if (r.ok) { passCache = {}; refreshNextBar(); } });
+      return S.refresh({ categories: st, auto: true }).then(function (r) { if (r.ok) { passCache = {}; refreshNextBar(); } });
     }).catch(function () {});
   }
   document.addEventListener("DOMContentLoaded", function () {

@@ -126,3 +126,15 @@ table.radar th{text-align:left;font-weight:500;color:var(--muted);vertical-align
 table.radar td{padding:5px 0;word-break:break-word}
 table.radar tr+tr th,table.radar tr+tr td{border-top:1px solid var(--line)}
 .bad-txt{color:var(--warn)}
+/* data sources (v1.2.0) */
+.srcrow{border-top:1px solid var(--line);padding:10px 0}
+.srchead{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.srchead .grow{flex:1}
+.sw{display:inline-flex;gap:6px;align-items:center;font-size:.9rem}
+.sw input{width:20px;height:20px}
+.pwrow{display:flex;gap:6px}.pwrow .inp{flex:1;min-width:0}
+.btn.danger{border-color:var(--bad);color:var(--bad)}
+.okmsg{color:var(--good)}.badmsg{color:var(--bad)}
+tr.mine{background:var(--goodbg)}
+table.cmp td{vertical-align:top}
+#srcCard h3{margin:16px 0 6px;font-size:1rem}

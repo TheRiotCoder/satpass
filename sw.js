@@ -1,9 +1,9 @@
 /* SatPass service worker (adapted from rf-toolbox) – offline app shell.
    VERSION is the single version string for the app (the About page reads it from the cache name). Bump it on every release. */
-const VERSION = "satpass-v1.1.0";
+const VERSION = "satpass-v1.2.0";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/style.css",
-  "js/vendor/satellite.min.js", "js/grid.js", "js/doppler.js", "js/format.js", "js/tle.js", "js/passes.js", "js/ics.js", "js/radio.js", "js/catalog.js",
+  "js/vendor/satellite.min.js", "js/grid.js", "js/doppler.js", "js/format.js", "js/tle.js", "js/passes.js", "js/ics.js", "js/radio.js", "js/catalog.js", "js/sources.js",
   "js/store.js", "js/draw.js", "js/app.js",
   "data/tle-snapshot.js", "data/world.js", "data/sar.js",
   "data/snap/sar.js", "data/snap/eo.js", "data/snap/nav.js", "data/snap/science.js",
@@ -26,9 +26,20 @@ self.addEventListener("message", (event) => { if (event.data === "skipWaiting") 
 function isActiveWorker() { return self.registration.active === self.serviceWorker || !self.serviceWorker; }
 function cachedShell() { return caches.match("index.html").then((r) => r || caches.match("./")); }
 
+// Data-source requests (CelesTrak, Space-Track, SatNOGS, N2YO, the user's proxy) and anything carrying a credential are NEVER touched by the worker:
+// no respondWith, no cache read or write. (N2YO keys can appear in a URL query, others travel in headers.)
+const CRED_HEADERS = ["authorization", "x-spacetrack-identity", "x-spacetrack-password", "x-satnogs-token", "x-n2yo-key", "x-satpass-proxy-token"];
+const API_HOSTS = /(^|\.)(celestrak\.org|space-track\.org|satnogs\.org|n2yo\.com|workers\.dev)$/i;
+function bypass(req, url) {
+  if (url.origin !== self.location.origin) return true;                                    // every cross-origin request, including the proxy
+  if (API_HOSTS.test(url.hostname)) return true;
+  if (/[?&](api_?key|token|password|identity|key)=/i.test(url.search)) return true;
+  if (/^\/(spacetrack|satnogs|n2yo|health)(\/|$)/.test(url.pathname)) return true;      // proxy-style paths
+  return CRED_HEADERS.some((h) => req.headers.has(h));
+}
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
+  if (req.method !== "GET" || bypass(req, new URL(req.url))) return;
 
   if (req.mode === "navigate") { // network first with timeout, cached shell offline
     let settle;
