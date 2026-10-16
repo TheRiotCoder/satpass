@@ -199,9 +199,17 @@
   }
 
   /* ---------- SatNOGS transmitters -> Doppler radio entries ---------- */
+  function finiteOrNull(v) { return typeof v === "number" && isFinite(v) ? v : null; }
+  /* CTCSS/PL tone in a SatNOGS description ("CTCSS 67.0 Hz", "PL 88.5Hz", "tone 74.4") -> number or null. Only the 67-254.1 Hz CTCSS range is accepted. */
+  function toneFromText(txt) {
+    var m = /(?:ctcss|\bPL\b|tone)\s*[:=]?\s*(\d{2,3}(?:\.\d)?)\s*(?:hz)?/i.exec(String(txt || "")); if (!m) return null;
+    var v = parseFloat(m[1]); return v >= 60 && v <= 260 ? v : null;
+  }
+  /* SatNOGS drift fields are parts per billion of the listed frequency (checked: SO-50 -4579 ppb on 436.795 MHz = -2.0 kHz, AO-7 -30827 ppb on 145.9775 MHz = -4.5 kHz, matching the known on-air offsets). */
+  function driftHz(f, ppb) { return f && ppb ? Math.round(f * ppb / 1e9) : 0; }
   function normalizeTx(o) {
     return { uuid: o.uuid, description: String(o.description || "").slice(0, 80), type: o.type, alive: o.alive !== false, status: o.status, mode: o.mode || null, uplinkMode: o.uplink_mode || null,
-      upLo: o.uplink_low || null, upHi: o.uplink_high || null, downLo: o.downlink_low || null, downHi: o.downlink_high || null, invert: !!o.invert, baud: o.baud || null, updated: o.updated || null, citation: o.citation || "" };
+      upLo: o.uplink_low || null, upHi: o.uplink_high || null, downLo: o.downlink_low || null, downHi: o.downlink_high || null, invert: !!o.invert, baud: o.baud || null, upDrift: finiteOrNull(o.uplink_drift), downDrift: finiteOrNull(o.downlink_drift), updated: o.updated || null, citation: o.citation || "" };
   }
   function parseSatnogsTransmitters(text) {
     var arr = jsonOrThrow(text, "SatNOGS"); if (!Array.isArray(arr)) { if (arr && arr.detail) throw SourceError(/throttl/i.test(arr.detail) ? "rate" : "auth", "SatNOGS: " + String(arr.detail).slice(0, 140), /throttl/i.test(arr.detail) ? 429 : 401); throw SourceError("parse", "SatNOGS response was not a list"); }
@@ -211,12 +219,16 @@
   }
   // SatNOGS transmitter -> radio entry usable by the Doppler tab (same fields as radio.js entries), flagged live
   function txToRadio(t, fetchedAt) {
-    var linear = t.upLo && t.upHi && t.downLo && t.downHi && /transponder/i.test(t.type || "") , M = 1e6;
+    var linear = t.upLo && t.upHi && t.downLo && t.downHi && /transponder/i.test(t.type || ""), M = 1e6;
     var label = "SatNOGS: " + (t.description || t.mode || "transmitter");
-    var note = "Live from SatNOGS DB (status " + t.status + ", entry updated " + String(t.updated || "?").slice(0, 10) + (t.citation ? ", source: " + t.citation : "") + "). Crowd-sourced – verify before operating.";
-    if (linear) return { label: label, mode: t.mode || "linear", kind: "linear", upLo: t.upLo, upHi: t.upHi, downLo: t.downLo, downHi: t.downHi, inverting: t.invert, note: note, live: true, source: "SatNOGS DB", fetchedAt: fetchedAt };
-    var fm = /^FM$/i.test(t.mode || "") && t.upLo && t.downLo;
-    return { label: label, mode: (t.mode || "?") + (t.baud ? " " + t.baud + " baud" : ""), kind: fm ? "fm" : "digital", up: t.upLo || null, down: t.downLo || t.upLo, tone: null, note: note, live: true, source: "SatNOGS DB", fetchedAt: fetchedAt };
+    var dd = driftHz(t.downLo, t.downDrift), ud = driftHz(t.upLo, t.upDrift);
+    var note = "Live from SatNOGS DB (status " + t.status + ", entry updated " + String(t.updated || "?").slice(0, 10) + (t.citation ? ", source: " + t.citation : "") + ")."
+      + (dd || ud ? " Listed drift applied: " + (dd ? "downlink " + (dd > 0 ? "+" : "") + dd + " Hz" : "") + (dd && ud ? ", " : "") + (ud ? "uplink " + (ud > 0 ? "+" : "") + ud + " Hz" : "") + " (SatNOGS value in ppb)." : "")
+      + " Crowd-sourced – verify before operating.";
+    if (linear) return { label: label, mode: t.mode || "linear", kind: "linear", upLo: t.upLo + ud, upHi: t.upHi + ud, downLo: t.downLo + dd, downHi: t.downHi + dd, inverting: t.invert, note: note, live: true, source: "SatNOGS DB", fetchedAt: fetchedAt };
+    var fm = /^FM$/i.test(t.mode || "") && t.upLo && t.downLo, up = t.upLo ? t.upLo + ud : null, down = t.downLo ? t.downLo + dd : null;
+    var tone = toneFromText(t.description);
+    return { label: label + (up && !down ? " (uplink only)" : ""), mode: (t.mode || t.uplinkMode || "?") + (t.baud ? " " + t.baud + " baud" : ""), kind: fm ? "fm" : "digital", up: up, down: down, tone: tone, note: note + (tone ? " CTCSS " + tone + " Hz taken from the description." : ""), live: true, source: "SatNOGS DB", fetchedAt: fetchedAt };
   }
   /* Compare a bundled (nominal) radio entry with the live list: matched if some live downlink (or linear band) is within tolHz. */
   function compareNominal(nominal, live, tolHz) {
@@ -286,7 +298,7 @@
     SourceError: SourceError, classifyHttp: classifyHttp, redact: redact, defaultConfig: defaultConfig, normalizeConfig: normalizeConfig, validateProxyUrl: validateProxyUrl, proxyAllowedByCsp: proxyAllowedByCsp,
     credsComplete: credsComplete, readiness: readiness, buildRequest: buildRequest, chunk: chunk, intList: intList,
     parseSpaceTrackGp: parseSpaceTrackGp, parseSatnogsTle: parseSatnogsTle, parseN2yoTle: parseN2yoTle, parseN2yoPasses: parseN2yoPasses, matchPasses: matchPasses,
-    parseSatnogsTransmitters: parseSatnogsTransmitters, txToRadio: txToRadio, compareNominal: compareNominal,
+    parseSatnogsTransmitters: parseSatnogsTransmitters, txToRadio: txToRadio, toneFromText: toneFromText, compareNominal: compareNominal,
     limitCheck: limitCheck, limitRecord: limitRecord, limitUsed: limitUsed, backoffMs: backoffMs, avoidBusyMinute: avoidBusyMinute, nextOkMinuteMs: nextOkMinuteMs,
     encryptCreds: encryptCreds, decryptCreds: decryptCreds, fallbackMessage: fallbackMessage, kindWord: kindWord
   };

@@ -67,6 +67,20 @@ const creds = { stIdentity: "me@example.com", stPassword: "p@ss w/ord&=?#", satn
   const tx7 = Src.parseSatnogsTransmitters(fx("satnogs-tx-7530.json")), tx43 = Src.parseSatnogsTransmitters(fx("satnogs-tx-43017.json"));
   const lin = [].concat(...Object.values(tx7), ...Object.values(tx43), ...Object.values(Src.parseSatnogsTransmitters(fx("satnogs-tx-44909.json")))).find(t => t.upLo && t.upHi && t.downLo && t.downHi && /transponder/i.test(t.type));
   ok("linear transponder maps to kind 'linear' with both bands", !lin || (() => { const r = Src.txToRadio(lin, 1); return r.kind === "linear" && r.upLo === lin.upLo && r.downHi === lin.downHi; })());
+  // ---- v1.2.1 (M5): drift, FM tone, uplink-only entries
+  {
+    const so = Src.parseSatnogsTransmitters(fx("satnogs-tx-27607.json"))[27607].find(t => /FM Voice/i.test(t.description));
+    const r = Src.txToRadio(so, 1);
+    ok("SO-50: listed downlink drift (-4579 ppb) is applied (436.795 MHz -> 436.793 MHz, -2 kHz) and stated in the note", so.downDrift === -4579 && r.down === 436795000 - 2000 && /downlink -2000 Hz/.test(r.note) && r.up === 145850000, [so.downDrift, r.down, r.note]);
+    ok("SO-50: CTCSS tone 67.0 read from the SatNOGS description (was always null)", r.kind === "fm" && r.tone === 67 && /CTCSS 67 Hz/.test(r.note), r.tone);
+    ok("toneFromText: 'CTCSS 67.0 Hz', 'PL 88.5Hz', 'tone 74.4' parsed; non-tone numbers and nonsense rejected", Src.toneFromText("V/U FM Transponder CTCSS 67.0 Hz") === 67 && Src.toneFromText("FM voice (PL 88.5Hz)") === 88.5 && Src.toneFromText("arm tone 74.4") === 74.4 && Src.toneFromText("GMSK 9600 baud") === null && Src.toneFromText("CTCSS 9999 Hz") === null && Src.toneFromText(null) === null);
+    const none = Src.txToRadio({ description: "Mode U GMSK", type: "Transmitter", mode: "GMSK", baud: 9600, status: "active", downLo: 437200000, downDrift: null, upLo: null }, 1);
+    ok("no drift field -> no frequency change and no drift sentence in the note", none.down === 437200000 && !/drift/i.test(none.note));
+    const upOnly = Src.txToRadio({ description: "Command uplink", type: "Transmitter", mode: "BPSK", status: "active", upLo: 145900000, downLo: null }, 1);
+    ok("uplink-only digital entry: uplink stays the uplink, downlink is null (was shown as the downlink), label says so", upOnly.up === 145900000 && upOnly.down === null && /uplink only/.test(upOnly.label) && upOnly.kind === "digital", upOnly);
+    const lin = Src.txToRadio({ description: "Lin", type: "Transponder", mode: "USB", status: "active", invert: true, upLo: 145000000, upHi: 145100000, downLo: 29000000, downHi: 29100000, upDrift: 1000, downDrift: -1000 }, 1);
+    ok("linear transponder: drift shifts the whole band (+1000 ppb of 145 MHz = +145 Hz; -1000 ppb of 29 MHz = -29 Hz), invert kept", lin.upLo === 145000145 && lin.upHi === 145100145 && lin.downLo === 29000000 - 29 && lin.downHi === 29100000 - 29 && lin.inverting === true, lin);
+  }
   const R = require("../js/radio.js");
   const cmp = Src.compareNominal(R.radios(25544), tx[25544]);
   ok("compareNominal: bundled ISS entries are compared with live ones (matched flag + nearest delta)", cmp.length === R.radios(25544).length && cmp.every(c => "matched" in c && "nearestDeltaHz" in c) && cmp.some(c => c.matched), cmp);
