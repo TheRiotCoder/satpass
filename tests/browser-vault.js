@@ -103,7 +103,7 @@ module.exports = async function run(h) {
   await send("WebAuthn.enable", { enableUI: false });
   const mkAuth = async (o) => (await send("WebAuthn.addVirtualAuthenticator", { options: Object.assign({ protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true }, o) })).authenticatorId;
   let auth = await mkAuth({});
-  await nav(bioUrl); await ev(`localStorage.clear(); sessionStorage.clear()`); await nav(bioUrl); await settings();
+  await nav(bioUrl); await (LOCAL ? ev(`localStorage.clear(); sessionStorage.clear()`) : wipeVault()); await nav(bioUrl); await settings();   // (live: same origin as the rest of the smoke, so only this test's keys are wiped)
   await set("#n2Key", SEC.n2); await set("#stId", SEC.id); await set("#stPw", SEC.pw);
   await ev(`SatStore.sources.setCreds({ n2yoKey: ${JSON.stringify(SEC.n2)}, stIdentity: ${JSON.stringify(SEC.id)}, stPassword: ${JSON.stringify(SEC.pw)} })`);
   check("1.3.0 (virtual authenticator): the biometric option is NOT offered before an encrypted vault exists", await ev(`!document.querySelector('#bioEnable')`));
@@ -142,7 +142,7 @@ module.exports = async function run(h) {
   check("1.3.0 (virtual authenticator): an authenticator without PRF is refused with a clear message and nothing is stored", await ev(`localStorage.getItem('satpass:bio') === null && /PRF|passphrase/.test(${q("#passMsg")}.textContent)`), await ev(`${q("#passMsg")}.textContent`));
   await send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: auth }); await send("WebAuthn.disable");
   check("1.3.0 (virtual authenticator): changing the vault passphrase drops a stale biometric record", await (async () => { await send("WebAuthn.enable", { enableUI: false }); const a2 = await mkAuth({}); await settings(); await waitFor(`!!${q("#bioEnable")}`, 5000); await ev(`${q("#bioEnable")}.click()`); await waitFor(`!!${q("#bioOn")}`, 10000); await ev(`SatStore.sources.lock('a-brand-new-passphrase-9')`); await sleep(300); const gone = await ev(`localStorage.getItem('satpass:bio') === null`); await send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: a2 }); await send("WebAuthn.disable"); return gone; })());
-  await ev(`SatStore.sources.forgetCreds(); localStorage.clear(); sessionStorage.clear()`);
+  await ev(`SatStore.sources.forgetCreds()`); await (LOCAL ? ev(`localStorage.clear(); sessionStorage.clear()`) : wipeVault());
 
   await send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
   // ================= part 5 (1.3.1): Export SAR list buttons
