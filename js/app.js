@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.3.0";
+  var DAY = 86400000, APP_VERSION = "1.3.1";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -913,9 +913,21 @@
       }).join("") : '<p class="note">No satellites match.</p>') + "</section>";
       if (mode === "curated" && !ql) extra += '<p class="note">Some curated satellites (e.g. AO-92, CAS-4A/4B) currently have no element set in CelesTrak\'s public data (retired, re-entered or not published); pick a category above, search, or paste TLEs.</p>';
       if (cat && cat.id === "sar" && !ql) extra += '<p class="note">SAR list = curated missions (data/sar.js). Tap a satellite for the live tracker; the Doppler tab shows its nominal <i>radar</i> frequency (informational, not for reception). Satellites with no public element set are listed but cannot be tracked.</p>';
+      if (cat && cat.id === "sar" && !ql) extra += '<div class="actions" id="sarExport"><button type="button" class="btn sm" id="sarCsv">⬇ CSV</button><button type="button" class="btn sm" id="sarJson">⬇ JSON</button><button type="button" class="btn sm" id="sarCopy">⧉ Copy (spreadsheet)</button><button type="button" class="btn sm" id="sarCopyCsv">⧉ Copy CSV</button></div><p class="note" id="sarExportNote">Export the whole SAR list offline: one row per satellite (' + Sar.exportRows().length + ' rows, ' + Sar.MISSIONS.length + ' missions, including missions with no public TLE). Unverified values stay blank. Columns: ' + esc(Sar.EXPORT_COLUMNS.join(", ")) + '. CSV is UTF-8 with BOM (opens correctly in Excel).</p>';
       if (ql && ql.length >= 3 && rows.length === 0 && Cat.lookupCheck(q).ok) extra += '<div class="actions"><button class="btn" id="lookupBtn">🔎 Search CelesTrak for “' + esc(q.trim()) + '”</button></div><p class="note">Looks up this name or NORAD id on CelesTrak (one small request; mega-constellations such as Starlink need a number, e.g. “STARLINK-1234”).</p>';
       else if (ql && ql.length >= 3 && rows.length === 0) extra += '<p class="note">' + esc(Cat.lookupCheck(q).reason || "") + "</p>";
       $("#satList").insertAdjacentHTML("beforeend", extra);
+      if ($("#sarCsv")) {
+        function saveFile(name, text, type) { var blob = new Blob([text], { type: type }), url = URL.createObjectURL(blob), a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 30000); }
+        function copyText(text, label) {
+          function fallback() { var ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); var ok = false; try { ok = document.execCommand("copy"); } catch (e) {} ta.remove(); toast(ok ? label + " copied" : "Couldn't copy – use the download buttons instead", 3000); }
+          if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast(label + " copied", 3000); }, fallback); else fallback();
+        }
+        $("#sarCsv").onclick = function () { saveFile("satpass-sar-list.csv", Sar.toCsv(), "text/csv;charset=utf-8"); toast("SAR list saved as CSV", 3000); };
+        $("#sarJson").onclick = function () { saveFile("satpass-sar-list.json", Sar.toJson(), "application/json"); toast("SAR list saved as JSON", 3000); };
+        $("#sarCopy").onclick = function () { copyText(Sar.toTsv(), "SAR list (tab-separated)"); };
+        $("#sarCopyCsv").onclick = function () { copyText(Sar.toCsv().replace(/^\ufeff/, ""), "SAR list (CSV)"); };
+      }
       var lb = $("#lookupBtn"); if (lb) lb.onclick = function () {
         lb.disabled = true; lb.textContent = "Searching…";
         S.lookup(q).then(function (r) { if (token !== view.token) return; if (r.ok) { mode = "searched"; S.save("satMode", mode); chips(); list(); status(); } else { lb.disabled = false; lb.textContent = "🔎 Search CelesTrak for “" + q.trim() + "”"; $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner bad">' + esc(r.message) + "</div>"); } });

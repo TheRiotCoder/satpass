@@ -145,5 +145,20 @@ module.exports = async function run(h) {
   await ev(`SatStore.sources.forgetCreds(); localStorage.clear(); sessionStorage.clear()`);
 
   await send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+  // ================= part 5 (1.3.1): Export SAR list buttons
+  await nav(APP); await ev(`localStorage.setItem('satpass:satMode', JSON.stringify('sar'))`); await nav(APP); await ev(`location.hash = '#/sats'`); await sleep(1200);
+  check("1.3.1: Sats → SAR shows the export buttons and a note with row/mission counts", await waitFor(`!!${q("#sarCsv")} && !!${q("#sarJson")} && !!${q("#sarCopy")} && !!${q("#sarCopyCsv")}`, 8000) && await ev(`/135 rows, 28 missions/.test(${q("#sarExportNote")}.textContent)`));
+  await ev(`window.__saved = []; window.__clip = []; const co = URL.createObjectURL.bind(URL); URL.createObjectURL = b => { b.arrayBuffer().then(ab => window.__saved.push({ type: b.type, bytes: [...new Uint8Array(ab)].slice(0, 3), text: new TextDecoder('utf-8', { ignoreBOM: true }).decode(ab) })); return co(b); };
+    const hook = t => { window.__clip.push(t); return Promise.resolve(); }; try { navigator.clipboard.writeText = hook; } catch (e) { Object.defineProperty(navigator, 'clipboard', { value: { writeText: hook }, configurable: true }); }
+    document.addEventListener('click', e => { const a = e.target.closest && e.target.closest('a[download]'); if (a) window.__saved.push({ download: a.download }); }, true);`);
+  await ev(`${q("#sarCsv")}.click()`); await ev(`${q("#sarJson")}.click()`); await waitFor(`window.__saved.filter(x => x.text).length >= 2`, 5000);
+  const saved = await ev(`window.__saved`), csv = saved.find(x => x.text && /csv/.test(x.type)), jsn = saved.find(x => x.text && /json/.test(x.type));
+  const ref = fs.readFileSync(path.join(__dirname, "fixtures", "satpass-sar-stats.csv"), "utf8");
+  check("1.3.1: ⬇ CSV downloads satpass-sar-list.csv: UTF-8 BOM, byte-identical to the reference CSV (135 rows)", !!csv && csv.bytes.join() === "239,187,191" && csv.text === ref && saved.some(x => x.download === "satpass-sar-list.csv"));
+  check("1.3.1: ⬇ JSON downloads satpass-sar-list.json with 135 typed rows", !!jsn && JSON.parse(jsn.text).rows.length === 135 && saved.some(x => x.download === "satpass-sar-list.json"));
+  await ev(`${q("#sarCopy")}.click()`); await ev(`${q("#sarCopyCsv")}.click()`); await sleep(500);
+  const clip = await ev(`window.__clip`);
+  check("1.3.1: Copy puts tab-separated text on the clipboard, Copy CSV the CSV without BOM", clip.length === 2 && clip[0].split("\n")[0].split("\t").length === 16 && !/^\ufeff/.test(clip[1]) && clip[1] === ref.replace(/^\ufeff/, "") && clip[0].split("\n").length === 137);
+  await ev(`localStorage.removeItem('satpass:satMode')`);
   await nav(APP); await wipeVault();   // back to the origin the rest of the smoke test uses, without this test's credentials / proxy settings
 };

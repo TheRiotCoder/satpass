@@ -478,5 +478,44 @@
   }
   function isSar(norad, name) { return !!forSat(norad, name); }
   function noPublicTle() { var out = []; MISSIONS.forEach(function (m) { (m.noPublicTle || []).forEach(function (n) { out.push({ name: n[0], mission: m }); }); }); return out; }
-  return { MISSIONS: MISSIONS, QUERIES: QUERIES, BANDS: BANDS, bandOf: bandOf, forSat: forSat, isSar: isSar, SATS: SATS, BY_NORAD: BY_NORAD, noPublicTle: noPublicTle };
+
+  /* ---------- export (1.3.1): one row per satellite, straight from the data above (works offline) ----------
+     Columns: mission, operator, band, centerFreqMHz, bandwidthMHz, approx, polarizations, modes, swathKm, swathMode, secondaryBands, noradId, satName,
+     satNote, notes, sources. A value that is null/unknown in the data stays BLANK (never guessed). A mission with no satellites listed gets one row
+     with blank satellite columns; "no public TLE" satellites get a row with a blank noradId and satNote "no public TLE". */
+  var EXPORT_COLUMNS = ["mission", "operator", "band", "centerFreqMHz", "bandwidthMHz", "approx", "polarizations", "modes", "swathKm", "swathMode", "secondaryBands", "noradId", "satName", "satNote", "notes", "sources"];
+  function exportRows() {
+    var out = [];
+    MISSIONS.forEach(function (m) {
+      function base() {
+        return { mission: m.name, operator: m.operator == null ? null : m.operator, band: m.band == null ? null : m.band, centerFreqMHz: m.centerFreqMHz == null ? null : m.centerFreqMHz, bandwidthMHz: m.bandwidthMHz == null ? null : m.bandwidthMHz,
+          approx: !!m.approx, polarizations: m.polarizations || null, modes: m.modes || null, swathKm: m.swathKm == null ? null : m.swathKm, swathMode: m.swathMode || null,
+          secondaryBands: m.secondary && m.secondary.length ? JSON.parse(JSON.stringify(m.secondary)) : null, noradId: null, satName: null, satNote: null, notes: m.notes || null, sources: (m.source || []).slice() };
+      }
+      var sats = m.sats || [];
+      sats.forEach(function (x) { var r = base(); r.noradId = x[0]; r.satName = x[1]; r.satNote = (m.satNotes && m.satNotes[String(x[0])]) || null; out.push(r); });
+      if (!sats.length) out.push(base());
+      (m.noPublicTle || []).forEach(function (x) { var r = base(); r.satName = x[0]; r.satNote = "no public TLE"; out.push(r); });
+    });
+    return out;
+  }
+  function cell(col, r) {
+    var v = r[col]; if (v === null || v === undefined || v === "") return "";
+    if (col === "approx") return v ? "yes" : "";
+    if (col === "secondaryBands") return JSON.stringify(v);
+    if (col === "sources") return v.join(" ");
+    return String(v);
+  }
+  function quoteCell(t, delim) { return /["\r\n]/.test(t) || t.indexOf(delim) >= 0 ? '"' + t.replace(/"/g, '""') + '"' : t; }
+  function toDelimited(rows, delim) {
+    rows = rows || exportRows();
+    return [EXPORT_COLUMNS.join(delim)].concat(rows.map(function (r) { return EXPORT_COLUMNS.map(function (c) { return quoteCell(cell(c, r), delim); }).join(delim); })).join("\n") + "\n";
+  }
+  function toCsv(rows) { return "\ufeff" + toDelimited(rows, ","); }     // UTF-8 BOM so Excel reads the en dashes / × correctly; LF line ends, RFC-4180 quoting
+  function toTsv(rows) { return toDelimited(rows, "\t"); }               // for the clipboard (pastes into Sheets / Excel); same quoting, no BOM
+  function toJson(rows) {
+    rows = rows || exportRows();
+    return JSON.stringify({ app: "SatPass", kind: "sar-list", columns: EXPORT_COLUMNS, note: "Nominal, informational radar parameters from data/sar.js; null = not verified (never guessed).", rows: rows }, null, 2) + "\n";
+  }
+  return { MISSIONS: MISSIONS, QUERIES: QUERIES, BANDS: BANDS, bandOf: bandOf, forSat: forSat, isSar: isSar, SATS: SATS, BY_NORAD: BY_NORAD, noPublicTle: noPublicTle, EXPORT_COLUMNS: EXPORT_COLUMNS, exportRows: exportRows, toCsv: toCsv, toTsv: toTsv, toJson: toJson };
 });
