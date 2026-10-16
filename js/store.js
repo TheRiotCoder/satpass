@@ -184,7 +184,7 @@
        - with a passphrase  -> AES-GCM blob in localStorage ("encrypted")
        - without            -> this tab's sessionStorage + memory only ("session"; gone when the tab is closed)
        - 1.2.0 plaintext copies are still read (so nothing is lost) but flagged "legacy-plain": the UI offers to encrypt or remove them. */
-  var credVals = {}, credBlob = load("creds", null), credLocked = false, memPass = null, legacyPlain = false;
+  var credVals = {}, credBlob = load("creds", null), credLocked = false, memKey = null, legacyPlain = false;   // memKey = {dek (random 256-bit data key, bytes), hdr (its passphrase wrapping)} while an encrypted vault is unlocked; the passphrase itself is never kept
   var SESS = null; try { SESS = typeof sessionStorage !== "undefined" ? sessionStorage : null; } catch (e) { SESS = null; }
   function sessLoad() { try { var v = SESS && SESS.getItem(LS + "creds"); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
   function sessSave(o) { try { if (!SESS) return false; if (o && Object.keys(o).length) SESS.setItem(LS + "creds", JSON.stringify(o)); else SESS.removeItem(LS + "creds"); return true; } catch (e) { return false; } }
@@ -193,14 +193,14 @@
   else if (credBlob && Object.keys(cleanCreds(credBlob)).length) { credVals = cleanCreds(credBlob); legacyPlain = true; }
   else credVals = cleanCreds(sessLoad());
   var sessionHint = !!load("credhint", false);   // non-secret marker: credentials were entered as session-only (so an empty store after the tab closed can say so)
-  function credMode() { return credLocked ? "locked" : memPass || (credBlob && credBlob.enc) ? "encrypted" : legacyPlain ? "legacy-plain" : Object.keys(credVals).length ? "session" : sessionHint ? "session-lost" : "none"; }
-  function secretList() { return CRED_KEYS.map(function (k) { return credVals[k]; }).concat([memPass]); }
+  function credMode() { return credLocked ? "locked" : memKey || (credBlob && credBlob.enc) ? "encrypted" : legacyPlain ? "legacy-plain" : Object.keys(credVals).length ? "session" : sessionHint ? "session-lost" : "none"; }
+  function secretList() { return CRED_KEYS.map(function (k) { return credVals[k]; }); }
   function red(t) { return Src.redact(t, secretList()); }
   function saveCfg() { save("sources", srcCfg); }
   function lockedErr() { return Src.SourceError("locked", "Credentials are locked – unlock them with your passphrase first. Nothing was changed."); }
   function persistCreds() {
     if (credLocked) return Promise.reject(lockedErr());   // never overwrite (or delete) the encrypted blob while it cannot be decrypted
-    if (memPass) return Src.encryptCreds(credVals, memPass).then(function (blob) {
+    if (memKey) return Src.sealVault(credVals, memKey.dek, memKey.hdr).then(function (blob) {
       if (!save("creds", blob)) throw Src.SourceError("storage", "Browser storage is full or blocked – the encrypted credentials could not be saved.");
       credBlob = blob; legacyPlain = false; sessSave(null); sessionHint = false; del("credhint");
     });
@@ -216,53 +216,85 @@
     CRED_KEYS.forEach(function (k) { if (patch && k in patch) { var v = String(patch[k] == null ? "" : patch[k]).trim(); if (v) credVals[k] = v; else delete credVals[k]; } });
     clearBlocks(); return persistCreds();
   }
-  function forgetCreds() { del("bio"); credVals = {}; credBlob = null; credLocked = false; memPass = null; legacyPlain = false; sessionHint = false; del("creds"); del("credhint"); sessSave(null); clearBlocks(); emit(); }
+  function forgetCreds() { del("bio"); credVals = {}; credBlob = null; credLocked = false; wipeKey(); legacyPlain = false; sessionHint = false; del("creds"); del("credhint"); sessSave(null); clearBlocks(); emit(); }
+  function wipeKey() { if (memKey && memKey.dek) { try { memKey.dek.fill(0); } catch (e) {} } memKey = null; }
+  function b64of(u8) { var t = ""; for (var i = 0; i < u8.length; i++) t += String.fromCharCode(u8[i]); return btoa(t); }
+  function bytesOf(b64) { var t = atob(b64), u = new Uint8Array(t.length); for (var i = 0; i < t.length; i++) u[i] = t.charCodeAt(i); return u; }
+  // First encryption, or a passphrase change: the same random data key is wrapped by the new passphrase (credentials re-sealed, biometric record stays valid).
   function lockWithPassphrase(pass) {
     if (credLocked) return Promise.reject(lockedErr());
     if (!pass || pass.length < Src.MIN_PASSPHRASE) return Promise.reject(Src.SourceError("config", "Use a passphrase of at least " + Src.MIN_PASSPHRASE + " characters."));
-    var prev = memPass; memPass = pass; return persistCreds().then(function () { credBlob = load("creds", null); if (prev !== pass) del("bio"); emit(); }, function (e) { memPass = prev; throw e; });   // a new passphrase invalidates the wrapped copy of the old one
+    return Src.createVault(credVals, pass, memKey && memKey.dek).then(function (v) {
+      if (!save("creds", v.blob)) throw Src.SourceError("storage", "Browser storage is full or blocked – the encrypted credentials could not be saved.");
+      credBlob = v.blob; memKey = { dek: v.dek, hdr: Src.vaultHeader(v.blob) }; legacyPlain = false; sessSave(null); sessionHint = false; del("credhint"); emit();
+    });
   }
   function unlock(pass) {
     if (!credBlob || !credBlob.enc) return Promise.resolve(true);
-    return Src.decryptCreds(credBlob, pass).then(function (v) { credVals = cleanCreds(v); credLocked = false; memPass = pass; emit(); return true; });
+    return Src.openVault(credBlob, pass).then(function (r) {
+      credVals = cleanCreds(r.creds);
+      if (!r.legacy) { memKey = { dek: r.dek, hdr: r.hdr }; credLocked = false; emit(); return true; }
+      // 1.2.x / 1.3.x blob (the passphrase key encrypted the credentials directly): migrate to the data-key format now that the passphrase is known
+      return Src.createVault(credVals, pass).then(function (v) {
+        memKey = { dek: v.dek, hdr: Src.vaultHeader(v.blob) }; if (save("creds", v.blob)) credBlob = v.blob;   // (if storage is full the old blob stays and the next successful save upgrades it)
+        credLocked = false; emit(); return true;
+      });
+    });
   }
-  function removePassphrase() { if (credLocked) return Promise.reject(lockedErr()); memPass = null; del("bio"); return persistCreds().then(emit); }   // -> session-only; the encrypted copy is deleted
+  function removePassphrase() { if (credLocked) return Promise.reject(lockedErr()); wipeKey(); del("bio"); return persistCreds().then(emit); }   // -> session-only; the encrypted copy and the biometric record are deleted
   function dropPlaintextCopy() { if (!legacyPlain) return Promise.resolve(); return persistCreds().then(emit); }       // 1.2.0 plaintext copy -> session-only
   /* ---- 1.3.0: auto-lock, biometric (WebAuthn PRF) second door, encrypted backup ---- */
   var vaultCfg = Src.normalizeVaultCfg(load("vault", null));
   function setVaultCfg(patch) { vaultCfg = Src.normalizeVaultCfg(Object.assign({}, vaultCfg, patch)); save("vault", vaultCfg); emit(); return Object.assign({}, vaultCfg); }
-  // Lock: forget every decrypted secret held in memory (credentials + passphrase). Only meaningful for a passphrase vault; session-only credentials
-  // have no way back, so they are left alone (the UI says so). JS strings cannot be overwritten in place: they are dropped and become garbage.
+  // Lock: forget every decrypted secret held in memory (credentials + data key). Only meaningful for a passphrase vault; session-only credentials
+  // have no way back, so they are left alone (the UI says so). JS strings cannot be overwritten in place: they are dropped and become garbage; the key bytes are zeroed.
   function lockNow() {
-    if (credLocked || !(memPass && credBlob && credBlob.enc)) return false;
-    credVals = {}; memPass = null; credLocked = true; emit(); return true;
+    if (credLocked || !(memKey && credBlob && credBlob.enc)) return false;
+    credVals = {}; wipeKey(); credLocked = true; emit(); return true;
   }
-  function bioRecord() { var r = load("bio", null); return Src.validBioRecord(r) ? r : null; }
+  function pageHost() { return typeof location !== "undefined" && location && location.hostname ? location.hostname : ""; }
+  function bioAllowed() { return !Src.sharedOrigin(pageHost()); }   // github.io is one origin shared by every Pages app of the account: no biometric there
+  // records from 1.3.0/1.3.1 (they wrapped the passphrase) and any record on a shared origin are deleted on load
+  (function purgeBio() { var raw = load("bio", null); if (raw && (!bioAllowed() || !Src.validBioRecord(raw))) del("bio"); })();
+  function bioRecord() { if (!bioAllowed()) return null; var r = load("bio", null); return Src.validBioRecord(r) ? r : null; }
   function bioInfo() { var r = bioRecord(); return r ? { created: r.created, rpId: r.rpId } : null; }
-  // enroll: meta {credId, prfSalt, rpId}, prf = PRF output. Needs the unlocked passphrase vault (the passphrase is what gets wrapped).
+  // enroll: meta {credId, prfSalt, rpId}, prf = PRF output. Needs the unlocked vault: what gets wrapped is the random data key, never the passphrase.
   function bioSave(meta, prf) {
     if (credLocked) return Promise.reject(lockedErr());
-    if (!memPass || !(credBlob && credBlob.enc)) return Promise.reject(Src.SourceError("config", "Set a passphrase and encrypt your credentials first – biometric unlock opens that encrypted copy."));
-    return Src.wrapSecret(memPass, prf, meta).then(function (rec) { if (!save("bio", rec)) throw Src.SourceError("storage", "Browser storage is full or blocked – biometric unlock was not saved."); emit(); return bioInfo(); });
+    if (!bioAllowed()) return Promise.reject(Src.SourceError("config", "Biometric unlock is not offered on a shared origin (" + pageHost() + ") – see the README for hosting SatPass on its own origin."));
+    if (!memKey || !(credBlob && credBlob.enc)) return Promise.reject(Src.SourceError("config", "Set a passphrase and encrypt your credentials first – biometric unlock opens that encrypted copy."));
+    return Src.wrapSecret(b64of(memKey.dek), prf, meta).then(function (rec) { if (!save("bio", rec)) throw Src.SourceError("storage", "Browser storage is full or blocked – biometric unlock was not saved."); emit(); return bioInfo(); })
+      .then(function (x) { try { if (prf && prf.fill) prf.fill(0); } catch (e) {} return x; });
   }
   function bioRemove() { del("bio"); emit(); }
-  // getPrf(record) -> Promise<ArrayBuffer|Uint8Array>: asks the authenticator (user verification) for the PRF output; then the vault opens like with the passphrase.
+  // getPrf(record) -> Promise<ArrayBuffer|Uint8Array>: asks the authenticator (user verification) for the PRF output; it unwraps the data key, which opens the vault.
   function bioUnlock(getPrf) {
     var rec = bioRecord(); if (!rec) return Promise.reject(Src.SourceError("config", "Biometric unlock is not set up on this device."));
     if (!credLocked) return Promise.resolve(true);
-    return Promise.resolve(getPrf(rec)).then(function (prf) { return Src.unwrapSecret(rec, prf); }).then(function (pass) { return unlock(pass); });
+    var hold;
+    return Promise.resolve(getPrf(rec)).then(function (prf) { hold = prf; return Src.unwrapSecret(rec, prf); }).then(function (dekB64) {
+      try { if (hold && hold.fill) hold.fill(0); } catch (e) {}
+      var dek = bytesOf(dekB64); return Src.openWithDek(credBlob, dek).then(function (creds) { credVals = cleanCreds(creds); memKey = { dek: dek, hdr: Src.vaultHeader(credBlob) }; credLocked = false; emit(); return true; });
+    });
   }
   function exportBackup(pass) {
     if (credLocked) return Promise.reject(lockedErr());
     return Src.exportBackup(getCreds(), srcCfg.proxy, pass);
   }
-  function importBackup(text, pass) {
+  // confirm(info) is asked before anything is overwritten or the proxy URL changes (a crafted backup could repoint the proxy); without it such an import is refused.
+  function importBackup(text, pass, confirm) {
     if (credLocked) return Promise.reject(lockedErr());
     return Src.importBackup(text, pass).then(function (r) {
       var patch = {}; CRED_KEYS.forEach(function (k) { if (typeof r.creds[k] === "string" && r.creds[k]) patch[k] = r.creds[k]; });
       if (!Object.keys(patch).length) throw Src.SourceError("parse", "The backup contains no credentials.");
-      var proxyOk = r.proxy && Src.validateProxyUrl(r.proxy).ok;
-      return setCreds(patch).then(function () { if (proxyOk) setConfig({ proxy: r.proxy }); return { imported: Object.keys(patch).length, proxy: !!proxyOk }; });
+      var proxyOk = !!(r.proxy && Src.validateProxyUrl(r.proxy).ok), host = ""; try { host = proxyOk ? new URL(r.proxy).host : ""; } catch (e) {}
+      var info = { keys: Object.keys(patch), overwrites: Object.keys(patch).filter(function (k) { return credVals[k] && credVals[k] !== patch[k]; }), proxy: proxyOk ? r.proxy : "", proxyHost: host, currentProxy: srcCfg.proxy || "", proxyChanged: proxyOk && r.proxy !== srcCfg.proxy };
+      var needs = info.overwrites.length > 0 || info.proxyChanged;
+      var ask = !needs ? Promise.resolve(true) : typeof confirm === "function" ? Promise.resolve(confirm(info)) : Promise.resolve(false);
+      return ask.then(function (yes) {
+        if (!yes) throw Src.SourceError("cancelled", "Import cancelled – nothing was changed.");
+        return setCreds(patch).then(function () { if (proxyOk) setConfig({ proxy: r.proxy }); return { imported: Object.keys(patch).length, proxy: proxyOk, overwrote: info.overwrites.length }; });
+      });
     });
   }
   function setConfig(patch) {
@@ -512,8 +544,8 @@
     ensure: ensure, ensureAll: ensureAll, allLoaded: allLoaded, members: members, categoriesOf: categoriesOf, catStatus: catStatus, staleCategories: staleCategories,
     lookup: lookup, searched: searched,
     sources: { META: Src.META, config: function () { return JSON.parse(JSON.stringify(srcCfg)); }, setConfig: setConfig, chain: enabledChain, readiness: readiness, status: function (id) { return Object.assign({}, stOf(id)); },
-      inBackoff: inBackoff, getCreds: getCreds, setCreds: setCreds, forgetCreds: forgetCreds, isLocked: function () { return credLocked; }, hasPassphrase: function () { return !!(credBlob && credBlob.enc) || !!memPass; }, credMode: credMode, dropPlaintextCopy: dropPlaintextCopy, minPassphrase: Src.MIN_PASSPHRASE,
-      lock: lockWithPassphrase, unlock: unlock, lockNow: lockNow, vaultCfg: function () { return Object.assign({}, vaultCfg); }, setVaultCfg: setVaultCfg, bioInfo: bioInfo, bioSave: bioSave, bioRemove: bioRemove, bioUnlock: bioUnlock, exportBackup: exportBackup, importBackup: importBackup, removePassphrase: removePassphrase, test: testSource, usage: function (id, op) { return Src.limitUsed(limHist, id, op, Date.now()); }, n2yoUsage: n2yoUsage },
+      inBackoff: inBackoff, getCreds: getCreds, setCreds: setCreds, forgetCreds: forgetCreds, isLocked: function () { return credLocked; }, hasPassphrase: function () { return !!(credBlob && credBlob.enc) || !!memKey; }, credMode: credMode, dropPlaintextCopy: dropPlaintextCopy, minPassphrase: Src.MIN_PASSPHRASE,
+      lock: lockWithPassphrase, unlock: unlock, lockNow: lockNow, vaultCfg: function () { return Object.assign({}, vaultCfg); }, setVaultCfg: setVaultCfg, bioInfo: bioInfo, bioAllowed: bioAllowed, bioSave: bioSave, bioRemove: bioRemove, bioUnlock: bioUnlock, exportBackup: exportBackup, importBackup: importBackup, removePassphrase: removePassphrase, test: testSource, usage: function (id, op) { return Src.limitUsed(limHist, id, op, Date.now()); }, n2yoUsage: n2yoUsage },
     fetchTransmitters: fetchTransmitters, liveTx: liveTx, liveRadios: liveRadios, txInfo: txInfo, clearLiveTx: clearLiveTx, txCompare: txCompare, n2yoPasses: n2yoPasses,
     onSaveFail: onSaveFail, lastSaveFail: function () { return lastSaveFail; },
     lastError: lastError, lastOk: lastOk, load: load, save: save, del: del,

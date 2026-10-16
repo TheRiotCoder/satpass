@@ -54,8 +54,8 @@ module.exports = async function run(h) {
 
   // passphrase: encrypt through the form
   await settings(); await set("#passIn", SEC.pass); await ev(`${q("#passLock")}.click()`); await sleep(2500);
-  check("1.3.0: passphrase form submit encrypts the vault (mode 'encrypted'); localStorage holds only the AES-GCM blob", await waitFor(`SatStore.sources.credMode() === 'encrypted'`, 8000) && await ev(`${JSON.stringify(SECRETS)}.every(s => JSON.stringify(localStorage).indexOf(s) < 0) && /"enc":1/.test(localStorage.getItem('satpass:creds'))`));
-  check("1.3.0: biometric option is hidden where unsupported (this origin is an IP address / no usable WebAuthn host)", !LOCAL || await ev(`!document.querySelector('#bioEnable') && !document.querySelector('#bioUnlock')`));
+  check("1.3.0: passphrase form submit encrypts the vault (mode 'encrypted'); localStorage holds only the AES-GCM blob", await waitFor(`SatStore.sources.credMode() === 'encrypted'`, 8000) && await ev(`${JSON.stringify(SECRETS)}.every(s => JSON.stringify(localStorage).indexOf(s) < 0) && /"enc":2/.test(localStorage.getItem('satpass:creds'))`));
+  check("1.3.0: biometric option is hidden where unsupported (this origin is an IP address / shared github.io / no usable WebAuthn host)", await ev(`!document.querySelector('#bioEnable') && !document.querySelector('#bioUnlock')`));
 
   // ================= part 2: auto-lock (hook exposes the tick with an injectable clock)
   await ev(`SatStore.sources.setVaultCfg({ idleMin: 1, hiddenMin: 2 })`);
@@ -96,14 +96,39 @@ module.exports = async function run(h) {
   await set("#bkPass2", SEC.bk); await ev(`${q("#bkImport")}.click()`); await waitFor(`Object.keys(SatStore.sources.getCreds()).length > 0`, 10000);
   check("1.3.0: import with the right passphrase restores the credentials and the proxy URL", await ev(`SatStore.sources.getCreds().stPassword === ${JSON.stringify(SEC.pw)} && SatStore.sources.getCreds().proxyToken === ${JSON.stringify(SEC.px)} && SatStore.sources.config().proxy === 'https://mock-proxy.workers.dev'`));
   check("1.3.0: imported credentials are session-only until a passphrase is set (nothing plaintext in localStorage)", await ev(`SatStore.sources.credMode() === 'session' && ${JSON.stringify(SECRETS)}.every(s => JSON.stringify(localStorage).indexOf(s) < 0)`));
+  // 1.3.2: importing over existing credentials / a different proxy asks first (a crafted backup could repoint the proxy)
+  await ev(`SatStore.sources.setCreds({ stPassword: 'Changed-Local-Pw-777' }); SatStore.sources.setConfig({ proxy: 'https://other-proxy.workers.dev' })`);
+  await settings(); await ev(`${q("#backupBox")}.open = true`);
+  const doc2 = await send("DOM.getDocument", { depth: 1 }), fi2 = await send("DOM.querySelector", { nodeId: doc2.root.nodeId, selector: "#bkFile" });
+  await send("DOM.setFileInputFiles", { nodeId: fi2.nodeId, files: [file] });
+  await ev(`window.__confirms = []; window.__confirmAnswer = false; window.confirm = m => { window.__confirms.push(m); return window.__confirmAnswer; }`);
+  await set("#bkPass2", SEC.bk); await ev(`${q("#bkImport")}.click()`); await waitFor(`window.__confirms.length > 0`, 8000); await sleep(500);
+  const cm = await ev(`window.__confirms[0] || ''`);
+  check("1.3.2: import over existing credentials asks first, naming the replaced values and the NEW proxy host (and the current one)", /replaces \d+ credential/.test(cm) && /mock-proxy\.workers\.dev/.test(cm) && /other-proxy\.workers\.dev/.test(cm) && /YOUR proxy/.test(cm), cm);
+  check("1.3.2: answering 'Cancel' changes nothing (password and proxy URL unchanged) and says so", await ev(`SatStore.sources.getCreds().stPassword === 'Changed-Local-Pw-777' && SatStore.sources.config().proxy === 'https://other-proxy.workers.dev' && /cancelled/i.test(${q("#bkMsg")}.textContent)`), await ev(`${q("#bkMsg")}.textContent`));
+  await ev(`window.__confirmAnswer = true; window.__confirms.length = 0`); await send("DOM.setFileInputFiles", { nodeId: fi2.nodeId, files: [file] });
+  await set("#bkPass2", SEC.bk); await ev(`${q("#bkImport")}.click()`); await waitFor(`SatStore.sources.getCreds().stPassword === ${JSON.stringify(SEC.pw)}`, 10000);
+  check("1.3.2: answering 'OK' applies the import (credentials and proxy URL replaced)", await ev(`SatStore.sources.config().proxy === 'https://mock-proxy.workers.dev'`));
   fs.unlinkSync(file);
 
-  // ================= part 4: biometric unlock through a virtual authenticator (needs a real host name: localhost locally, the Pages host when testing live)
+  // ================= part 4: biometric unlock. LOCAL: localhost (own origin) with Chrome's virtual authenticator. LIVE: the Pages host is the shared github.io origin, where biometrics must be OFF.
   const bioUrl = LOCAL ? `http://localhost:${HTTP}/satpass/` : APP;
+  const oldRec = JSON.stringify({ v: 1, credId: "Y3JlZA", prfSalt: "c2FsdA==", rpId: new URL(bioUrl).hostname, created: 1, hk: "AAAA", iv: "AAAA", ct: "AAAA" });
+  const v2Rec = JSON.stringify({ v: 2, credId: "Y3JlZA", prfSalt: "c2FsdA==", rpId: new URL(bioUrl).hostname, created: 1, hk: "AAAA", iv: "AAAA", ct: "AAAA" });
+  await nav(bioUrl); await ev(`localStorage.setItem('satpass:bio', ${JSON.stringify(oldRec)})`); await nav(bioUrl);
+  check("1.3.2: a 1.3.0/1.3.1 biometric record (v1, it wrapped the passphrase) is deleted on load", await ev(`localStorage.getItem('satpass:bio') === null`));
+  if (!LOCAL) {
+    await ev(`localStorage.setItem('satpass:bio', ${JSON.stringify(v2Rec)})`); await nav(bioUrl);
+    check("1.3.2 (shared github.io origin): even a well-formed v2 biometric record is deleted on load", await ev(`localStorage.getItem('satpass:bio') === null`));
+    await settings(); await ev(`SatStore.sources.setCreds({ n2yoKey: ${JSON.stringify(SEC.n2)} })`); await set("#passIn", SEC.pass); await ev(`${q("#passLock")}.click()`); await waitFor(`SatStore.sources.credMode() === 'encrypted'`, 8000); await settings(); await sleep(800);
+    check("1.3.2 (shared github.io origin): no biometric button is offered; a short explanation (own origin / README) is shown instead", await ev(`!document.querySelector('#bioEnable') && !document.querySelector('#bioUnlock') && /not offered on this address/.test((${q("#bioShared")} || {}).textContent || '') && /own origin/.test(${q("#bioShared")}.textContent)`));
+    check("1.3.2 (shared github.io origin): enrolment is refused by the store and by SatBio even if called directly", await ev(`SatStore.sources.bioSave({ credId: 'a', prfSalt: 'b', rpId: location.hostname }, new Uint8Array(32)).then(() => false, e => e.kind === 'config')`) && await ev(`SatBio.enroll().then(() => false, e => /shared origin/.test(e.message))`) && await ev(`localStorage.getItem('satpass:bio') === null`));
+    await ev(`SatStore.sources.forgetCreds()`); await wipeVault();
+  } else {
   await send("WebAuthn.enable", { enableUI: false });
   const mkAuth = async (o) => (await send("WebAuthn.addVirtualAuthenticator", { options: Object.assign({ protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true }, o) })).authenticatorId;
   let auth = await mkAuth({});
-  await nav(bioUrl); await (LOCAL ? ev(`localStorage.clear(); sessionStorage.clear()`) : wipeVault()); await nav(bioUrl); await settings();   // (live: same origin as the rest of the smoke, so only this test's keys are wiped)
+  await nav(bioUrl); await ev(`localStorage.clear(); sessionStorage.clear()`); await nav(bioUrl); await settings();
   await set("#n2Key", SEC.n2); await set("#stId", SEC.id); await set("#stPw", SEC.pw);
   await ev(`SatStore.sources.setCreds({ n2yoKey: ${JSON.stringify(SEC.n2)}, stIdentity: ${JSON.stringify(SEC.id)}, stPassword: ${JSON.stringify(SEC.pw)} })`);
   check("1.3.0 (virtual authenticator): the biometric option is NOT offered before an encrypted vault exists", await ev(`!document.querySelector('#bioEnable')`));
@@ -112,15 +137,15 @@ module.exports = async function run(h) {
   check("1.3.0 (virtual authenticator): feature detection says supported and the 'Enable biometric unlock' button appears", sup.ok === true && await waitFor(`!!${q("#bioEnable")}`, 5000), sup);
   await ev(`${q("#bioEnable")}.click()`); await waitFor(`!!${q("#bioOn")}`, 10000);
   const rec = await ev(`JSON.parse(localStorage.getItem('satpass:bio') || 'null')`);
-  check("1.3.0 (virtual authenticator): enrolment works: passkey created for the page host with PRF, wrapped record stored (no passphrase / secret in it)", !!rec && rec.rpId === new URL(bioUrl).hostname && rec.v === 1 && SECRETS.every(s => JSON.stringify(rec).indexOf(s) < 0) && await ev(`!!${q("#bioOn")}`));
+  check("1.3.0 (virtual authenticator): enrolment works (1.3.2: v2 record wrapping the data key): passkey created for the page host with PRF, wrapped record stored (no passphrase / secret in it)", !!rec && rec.rpId === new URL(bioUrl).hostname && rec.v === 2 && SECRETS.every(s => JSON.stringify(rec).indexOf(s) < 0) && await ev(`!!${q("#bioOn")}`));
   const creds = (await send("WebAuthn.getCredentials", { authenticatorId: auth })).credentials;
-  check("1.3.0 (virtual authenticator): exactly one credential, resident, rpId = host, user verification was required", creds.length === 1 && creds[0].rpId === rec.rpId && creds[0].isResidentCredential === true, creds.map(c => c.rpId));
+  check("1.3.0 (virtual authenticator): exactly one credential, NON-resident (residentKey discouraged), rpId = host, user verification was required", creds.length === 1 && creds[0].rpId === rec.rpId && creds[0].isResidentCredential === false, creds.map(c => c.rpId));
   // reload = new "session": sessionStorage kept in the same tab, so lock explicitly and also simulate a fresh start (memory cleared)
   await ev(`SatStore.sources.lockNow()`); await settings(); await sleep(700);
   check("1.3.0 (virtual authenticator): locked vault offers 'Unlock with biometrics' next to the passphrase", await waitFor(`!!${q("#bioUnlock")}`, 5000));
   await ev(`${q("#bioUnlock")}.click()`); await waitFor(`!SatStore.sources.isLocked()`, 10000);
   check("1.3.0 (virtual authenticator): biometric unlock (PRF → key → vault) restores the credentials without the passphrase", await ev(`SatStore.sources.getCreds().stPassword === ${JSON.stringify(SEC.pw)} && SatStore.sources.getCreds().n2yoKey === ${JSON.stringify(SEC.n2)}`));
-  check("1.3.0 (virtual authenticator): after biometric unlock, editing credentials re-encrypts them (still no plaintext on disk)", await ev(`SatStore.sources.setCreds({ satnogsToken: ${JSON.stringify(SEC.sn)} }).then(() => ${JSON.stringify(SECRETS)}.every(s => JSON.stringify(localStorage).indexOf(s) < 0) && /"enc":1/.test(localStorage.getItem('satpass:creds')))`));
+  check("1.3.0 (virtual authenticator): after biometric unlock, editing credentials re-encrypts them (still no plaintext on disk)", await ev(`SatStore.sources.setCreds({ satnogsToken: ${JSON.stringify(SEC.sn)} }).then(() => ${JSON.stringify(SECRETS)}.every(s => JSON.stringify(localStorage).indexOf(s) < 0) && /"enc":2/.test(localStorage.getItem('satpass:creds')))`));
   // user verification fails (finger not recognised): stays locked, passphrase works
   await ev(`SatStore.sources.lockNow()`); await settings(); await waitFor(`!!${q("#bioUnlock")}`, 5000);
   await send("WebAuthn.setUserVerified", { authenticatorId: auth, isUserVerified: false });
@@ -141,10 +166,11 @@ module.exports = async function run(h) {
   await settings(); await waitFor(`!!${q("#bioEnable")}`, 5000); await ev(`${q("#bioEnable")}.click()`); await sleep(2500);
   check("1.3.0 (virtual authenticator): an authenticator without PRF is refused with a clear message and nothing is stored", await ev(`localStorage.getItem('satpass:bio') === null && /PRF|passphrase/.test(${q("#passMsg")}.textContent)`), await ev(`${q("#passMsg")}.textContent`));
   await send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: auth }); await send("WebAuthn.disable");
-  check("1.3.0 (virtual authenticator): changing the vault passphrase drops a stale biometric record", await (async () => { await send("WebAuthn.enable", { enableUI: false }); const a2 = await mkAuth({}); await settings(); await waitFor(`!!${q("#bioEnable")}`, 5000); await ev(`${q("#bioEnable")}.click()`); await waitFor(`!!${q("#bioOn")}`, 10000); await ev(`SatStore.sources.lock('a-brand-new-passphrase-9')`); await sleep(300); const gone = await ev(`localStorage.getItem('satpass:bio') === null`); await send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: a2 }); await send("WebAuthn.disable"); return gone; })());
-  await ev(`SatStore.sources.forgetCreds()`); await (LOCAL ? ev(`localStorage.clear(); sessionStorage.clear()`) : wipeVault());
+  check("1.3.2 (virtual authenticator): changing the vault passphrase keeps biometric unlock working (only the data key is re-wrapped)", await (async () => { await send("WebAuthn.enable", { enableUI: false }); const a2 = await mkAuth({}); await settings(); await waitFor(`!!${q("#bioEnable")}`, 5000); await ev(`${q("#bioEnable")}.click()`); await waitFor(`!!${q("#bioOn")}`, 10000); const before = await ev(`localStorage.getItem('satpass:bio')`); await ev(`SatStore.sources.lock('a-brand-new-passphrase-9')`); await sleep(300); const kept = await ev(`localStorage.getItem('satpass:bio')`) === before; await ev(`SatStore.sources.lockNow()`); await ev(`SatStore.sources.bioUnlock(rec => SatBio.assertPrf(rec))`); const ok2 = await ev(`!SatStore.sources.isLocked() && SatStore.sources.getCreds().stPassword === ${JSON.stringify(SEC.pw)}`); await send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: a2 }); await send("WebAuthn.disable"); return kept && ok2; })());
+  await ev(`SatStore.sources.forgetCreds()`); await ev(`localStorage.clear(); sessionStorage.clear()`);
 
   await send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+  }
   // ================= part 5 (1.3.1): Export SAR list buttons
   await nav(APP); await ev(`localStorage.setItem('satpass:satMode', JSON.stringify('sar'))`); await nav(APP); await ev(`location.hash = '#/sats'`); await sleep(1200);
   check("1.3.1: Sats → SAR shows the export buttons and a note with row/mission counts", await waitFor(`!!${q("#sarCsv")} && !!${q("#sarJson")} && !!${q("#sarCopy")} && !!${q("#sarCopyCsv")}`, 8000) && await ev(`/135 rows, 28 missions/.test(${q("#sarExportNote")}.textContent)`));

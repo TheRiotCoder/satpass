@@ -143,7 +143,7 @@ module.exports = async function run(h) {
   // ---- passphrase lock / reload / unlock
   await go("#/settings"); await sleep(400);
   await ev(setVal("#passIn", CRED.pass)); await click("#passLock"); await waitFor(`/encrypted with your passphrase/i.test(${qs("#credNote")}.textContent)`);
-  check("passphrase: stored credentials become an AES-GCM blob (no plaintext secret in localStorage)", await ev(`(() => { const raw = localStorage.getItem('satpass:creds'); return /"enc":1/.test(raw) && ![${SECRETS.map(s => JSON.stringify(s)).join(",")}].some(s => raw.indexOf(s) >= 0); })()`));
+  check("passphrase: stored credentials become an AES-GCM blob (no plaintext secret in localStorage)", await ev(`(() => { const raw = localStorage.getItem('satpass:creds'); return /"enc":2/.test(raw) && ![${SECRETS.map(s => JSON.stringify(s)).join(",")}].some(s => raw.indexOf(s) >= 0); })()`));
   await reload(); await go("#/settings"); await sleep(500);
   check("after reload the credentials are locked (sources not ready) and the UI says so", await ev(`SatStore.sources.isLocked() && !SatStore.sources.readiness('spacetrack').ready && /locked|encrypted/i.test(document.querySelector('#credNote').textContent) && document.querySelector('#passLock').textContent === 'Unlock'`));
   await ev(setVal("#passIn", "wrong-passphrase")); await click("#passLock"); await sleep(1200);

@@ -277,14 +277,15 @@
       return c.subtle.deriveKey({ name: "PBKDF2", salt: salt, iterations: iter, hash: "SHA-256" }, k, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
     });
   }
-  function encryptCreds(obj, pass, c) {
+  function aadParams(iv, aad) { var p = { name: "AES-GCM", iv: iv }; if (aad) p.additionalData = new TextEncoder().encode(aad); return p; }
+  function encryptCreds(obj, pass, c, aad) {
     c = getSubtle(c); var salt = c.getRandomValues(new Uint8Array(16)), iv = c.getRandomValues(new Uint8Array(12));
-    return deriveKey(c, pass, salt, PBKDF2_ITER).then(function (key) { return c.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, new TextEncoder().encode(JSON.stringify(obj))); })
+    return deriveKey(c, pass, salt, PBKDF2_ITER).then(function (key) { return c.subtle.encrypt(aadParams(iv, aad), key, new TextEncoder().encode(JSON.stringify(obj))); })
       .then(function (ct) { return { enc: 1, iter: PBKDF2_ITER, salt: b64(salt), iv: b64(iv), ct: b64(ct) }; });
   }
-  function decryptCreds(blob, pass, c) {
+  function decryptCreds(blob, pass, c, aad) {
     c = getSubtle(c);
-    return deriveKey(c, pass, unb64(blob.salt), clampIter(blob.iter)).then(function (key) { return c.subtle.decrypt({ name: "AES-GCM", iv: unb64(blob.iv) }, key, unb64(blob.ct)); })
+    return deriveKey(c, pass, unb64(blob.salt), clampIter(blob.iter)).then(function (key) { return c.subtle.decrypt(aadParams(unb64(blob.iv), aad), key, unb64(blob.ct)); })
       .then(function (pt) { return JSON.parse(new TextDecoder().decode(pt)); }, function () { throw SourceError("auth", "Wrong passphrase."); });
   }
 
@@ -292,43 +293,96 @@
   // The vault stays "passphrase -> PBKDF2 -> AES-GCM" (unchanged, still decrypts 1.2.x blobs). Biometric unlock adds a SECOND, independent door:
   // the passphrase is wrapped (AES-GCM) with a key derived (HKDF-SHA256) from a 32-byte WebAuthn PRF output that only the platform authenticator
   // can produce after user verification. The record is useless without the authenticator; the passphrase always remains the recovery path.
-  var BIO_INFO = "satpass-vault-bio-v1";
+  var BIO_INFO = "satpass-vault-bio-v2";
   function prfBytes(p) { var u = p instanceof Uint8Array ? p : new Uint8Array(p || 0); if (u.length < 32) throw SourceError("config", "The authenticator returned no usable PRF secret."); return u.slice(0, 32); }
   function bioKey(c, prf, salt) {
-    return c.subtle.importKey("raw", prfBytes(prf), "HKDF", false, ["deriveKey"]).then(function (k) {
+    return Promise.resolve().then(function () { return c.subtle.importKey("raw", prfBytes(prf), "HKDF", false, ["deriveKey"]); }).then(function (k) {
       return c.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: salt, info: new TextEncoder().encode(BIO_INFO) }, k, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
     });
   }
   function bioAad(rec) { return new TextEncoder().encode(BIO_INFO + "|" + rec.rpId + "|" + rec.credId + "|" + rec.prfSalt); }
+  var PAD_TO = 128;   // wrapped secrets are padded to a fixed size so the ciphertext length says nothing about the secret
+  function padSecret(bytes) { if (bytes.length > PAD_TO - 2) throw SourceError("config", "Secret too long to wrap."); var out = new Uint8Array(PAD_TO); out[0] = bytes.length >> 8; out[1] = bytes.length & 255; out.set(bytes, 2); return out; }
+  function unpadSecret(buf) { var u = new Uint8Array(buf), n = (u[0] << 8) | u[1]; if (u.length !== PAD_TO || n > PAD_TO - 2) throw new Error("bad padding"); return u.slice(2, 2 + n); }
   function validBioRecord(r) {
     var ok = function (v, max) { return typeof v === "string" && v.length > 0 && v.length <= max; };
-    return !!(r && typeof r === "object" && r.v === 1 && ok(r.credId, 1400) && ok(r.prfSalt, 100) && ok(r.rpId, 253) && ok(r.hk, 100) && ok(r.iv, 40) && ok(r.ct, 2000));
+    return !!(r && typeof r === "object" && r.v === 2 && ok(r.credId, 1400) && ok(r.prfSalt, 100) && ok(r.rpId, 253) && ok(r.hk, 100) && ok(r.iv, 40) && ok(r.ct, 2000));
   }
-  // meta: {credId (base64url), prfSalt (base64), rpId}; prf: the 32-byte PRF output for prfSalt. Returns the record to store.
+  // Shared-origin hosts: every app under the same host name shares localStorage and can ask the same passkey, so biometric unlock is not offered there.
+  // github.io (user and project Pages sites) is one origin per user; a custom domain, localhost or a dedicated host (Netlify/Cloudflare Pages site) is its own origin.
+  function sharedOrigin(host) { host = String(host || "").toLowerCase().replace(/\.$/, ""); return host === "github.io" || /\.github\.io$/.test(host); }
+  // meta: {credId (base64url), prfSalt (base64), rpId}; prf: the 32-byte PRF output for prfSalt. What is wrapped is the random vault DATA KEY (never the passphrase).
+  // Returns a Promise (a short PRF rejects, it does not throw).
   function wrapSecret(secret, prf, meta, c) {
-    c = getSubtle(c); var hk = c.getRandomValues(new Uint8Array(16)), iv = c.getRandomValues(new Uint8Array(12));
-    var rec = { v: 1, credId: meta.credId, prfSalt: meta.prfSalt, rpId: meta.rpId, created: Date.now(), hk: b64(hk), iv: b64(iv) };
-    return bioKey(c, prf, hk).then(function (key) { return c.subtle.encrypt({ name: "AES-GCM", iv: iv, additionalData: bioAad(rec) }, key, new TextEncoder().encode(String(secret))); })
-      .then(function (ct) { rec.ct = b64(ct); return rec; });
+    return Promise.resolve().then(function () {
+      c = getSubtle(c); var hk = c.getRandomValues(new Uint8Array(16)), iv = c.getRandomValues(new Uint8Array(12));
+      var rec = { v: 2, credId: meta.credId, prfSalt: meta.prfSalt, rpId: meta.rpId, created: Date.now(), hk: b64(hk), iv: b64(iv) }, plain = padSecret(new TextEncoder().encode(String(secret)));
+      return bioKey(c, prf, hk).then(function (key) { return c.subtle.encrypt({ name: "AES-GCM", iv: iv, additionalData: bioAad(rec) }, key, plain); })
+        .then(function (ct) { rec.ct = b64(ct); return rec; });
+    });
   }
   function unwrapSecret(rec, prf, c) {
-    c = getSubtle(c); if (!validBioRecord(rec)) return Promise.reject(SourceError("config", "The stored biometric record is damaged – remove it and set it up again."));
-    return bioKey(c, prf, unb64(rec.hk)).then(function (key) { return c.subtle.decrypt({ name: "AES-GCM", iv: unb64(rec.iv), additionalData: bioAad(rec) }, key, unb64(rec.ct)); })
-      .then(function (pt) { return new TextDecoder().decode(pt); }, function () { throw SourceError("auth", "The biometric key did not match this vault – use your passphrase and set biometric unlock up again."); });
+    return Promise.resolve().then(function () {
+      c = getSubtle(c); if (!validBioRecord(rec)) throw SourceError("config", "The stored biometric record is damaged or from an older version – remove it and set it up again.");
+      return bioKey(c, prf, unb64(rec.hk)).then(function (key) { return c.subtle.decrypt({ name: "AES-GCM", iv: unb64(rec.iv), additionalData: bioAad(rec) }, key, unb64(rec.ct)); })
+        .then(function (pt) { return new TextDecoder().decode(unpadSecret(pt)); }, function (e) { if (e && e.kind) throw e; throw SourceError("auth", "The biometric key did not match this vault – use your passphrase and set biometric unlock up again."); });
+    });
+  }
+
+  /* ---------- vault v2 (1.3.2): credentials are encrypted under a random 256-bit DATA KEY; the data key is wrapped by the passphrase-derived key
+     (PBKDF2-SHA256 600k -> AES-GCM) and, optionally, by the WebAuthn-PRF key above. Changing the passphrase re-wraps only the data key; the passphrase is never
+     stored or recoverable from the biometric record. Blobs written by 1.2.x/1.3.x ({enc:1}) still open with the passphrase and are migrated on that unlock. */
+  function vaultAad(kind, h) { return new TextEncoder().encode("satpass-vault-v2|" + kind + "|" + h.iter + "|" + h.salt); }
+  function vaultHeader(blob) { return { iter: blob.iter, salt: blob.salt, wiv: blob.wiv, wk: blob.wk }; }
+  function dataKey(c, dek) { return c.subtle.importKey("raw", dek, "AES-GCM", false, ["encrypt", "decrypt"]); }
+  function sealVault(creds, dek, hdr, c) {   // new ciphertext under the same wrapped key
+    return Promise.resolve().then(function () {
+      c = getSubtle(c); var iv = c.getRandomValues(new Uint8Array(12));
+      return dataKey(c, dek).then(function (k) { return c.subtle.encrypt({ name: "AES-GCM", iv: iv, additionalData: vaultAad("creds", hdr) }, k, new TextEncoder().encode(JSON.stringify(creds))); })
+        .then(function (ct) { return { enc: 2, iter: hdr.iter, salt: hdr.salt, wiv: hdr.wiv, wk: hdr.wk, iv: b64(iv), ct: b64(ct) }; });
+    });
+  }
+  // wrap `dek` (or a fresh random one) with a passphrase and seal the credentials -> {blob, dek}
+  function createVault(creds, pass, dek, c) {
+    return Promise.resolve().then(function () {
+      c = getSubtle(c); dek = dek || c.getRandomValues(new Uint8Array(32));
+      var salt = c.getRandomValues(new Uint8Array(16)), wiv = c.getRandomValues(new Uint8Array(12)), hdr = { iter: PBKDF2_ITER, salt: b64(salt), wiv: b64(wiv) };
+      return deriveKey(c, pass, salt, PBKDF2_ITER).then(function (kek) { return c.subtle.encrypt({ name: "AES-GCM", iv: wiv, additionalData: vaultAad("dek", hdr) }, kek, dek); })
+        .then(function (wk) { hdr.wk = b64(wk); return sealVault(creds, dek, hdr, c); }).then(function (blob) { return { blob: blob, dek: dek }; });
+    });
+  }
+  function validVault(b) { return !!(b && b.enc === 2 && typeof b.salt === "string" && typeof b.wiv === "string" && typeof b.wk === "string" && typeof b.iv === "string" && typeof b.ct === "string"); }
+  function openWithDek(blob, dek, c) {
+    return Promise.resolve().then(function () {
+      c = getSubtle(c); if (!validVault(blob)) throw SourceError("config", "The stored credentials are in an older format – unlock them with your passphrase.");
+      return dataKey(c, dek).then(function (k) { return c.subtle.decrypt({ name: "AES-GCM", iv: unb64(blob.iv), additionalData: vaultAad("creds", blob) }, k, unb64(blob.ct)); })
+        .then(function (pt) { return JSON.parse(new TextDecoder().decode(pt)); }, function () { throw SourceError("auth", "The stored key does not open these credentials."); });
+    });
+  }
+  // open with the passphrase: -> {creds, dek, hdr, legacy}. Legacy ({enc:1}) blobs return dek:null, legacy:true (the caller migrates).
+  function openVault(blob, pass, c) {
+    return Promise.resolve().then(function () {
+      c = getSubtle(c);
+      if (!blob || blob.enc !== 2) return decryptCreds(blob, pass, c).then(function (creds) { return { creds: creds, dek: null, hdr: null, legacy: true }; });
+      if (!validVault(blob)) throw SourceError("config", "The stored credentials are damaged.");
+      return deriveKey(c, pass, unb64(blob.salt), clampIter(blob.iter)).then(function (kek) { return c.subtle.decrypt({ name: "AES-GCM", iv: unb64(blob.wiv), additionalData: vaultAad("dek", blob) }, kek, unb64(blob.wk)); })
+        .then(function (d) { return new Uint8Array(d); }, function () { throw SourceError("auth", "Wrong passphrase."); })
+        .then(function (dek) { return openWithDek(blob, dek, c).then(function (creds) { return { creds: creds, dek: dek, hdr: vaultHeader(blob), legacy: false }; }); });
+    });
   }
 
   var BACKUP_APP = "satpass-credentials-backup";
+  function backupAad(h) { return "satpass-backup|" + h.app + "|" + h.v + "|" + h.created + "|" + h.note; }   // the header travels outside the ciphertext but is bound to it
   function exportBackup(creds, proxy, pass, c) {
     if (!pass || String(pass).length < MIN_PASSPHRASE) return Promise.reject(SourceError("config", "Use a backup passphrase of at least " + MIN_PASSPHRASE + " characters."));
     if (!creds || !Object.keys(creds).length) return Promise.reject(SourceError("config", "There are no credentials to back up."));
-    return encryptCreds({ creds: creds, proxy: proxy || "" }, pass, c).then(function (blob) {
-      return JSON.stringify({ app: BACKUP_APP, v: 1, created: new Date().toISOString(), note: "SatPass encrypted credentials backup (PBKDF2-SHA256 " + PBKDF2_ITER + " iterations, AES-GCM). Useless without its passphrase. Import it in SatPass → Setup → Data sources.", blob: blob }, null, 1);
-    });
+    var head = { app: BACKUP_APP, v: 2, created: new Date().toISOString(), note: "SatPass encrypted credentials backup (PBKDF2-SHA256 " + PBKDF2_ITER + " iterations, AES-GCM, header authenticated). Useless without its passphrase. Import it in SatPass → Setup → Data sources." };
+    return encryptCreds({ creds: creds, proxy: proxy || "" }, pass, c, backupAad(head)).then(function (blob) { head.blob = blob; return JSON.stringify(head, null, 1); });
   }
   function importBackup(text, pass, c) {
     var o; try { o = JSON.parse(String(text).slice(0, 200000)); } catch (e) { return Promise.reject(SourceError("parse", "That file is not a SatPass credentials backup.")); }
-    if (!o || o.app !== BACKUP_APP || o.v !== 1 || !o.blob || o.blob.enc !== 1 || typeof o.blob.ct !== "string" || typeof o.blob.salt !== "string" || typeof o.blob.iv !== "string") return Promise.reject(SourceError("parse", "That file is not a SatPass credentials backup."));
-    return decryptCreds(o.blob, pass, c).then(function (p) {
+    if (!o || o.app !== BACKUP_APP || (o.v !== 1 && o.v !== 2) || !o.blob || o.blob.enc !== 1 || typeof o.blob.ct !== "string" || typeof o.blob.salt !== "string" || typeof o.blob.iv !== "string") return Promise.reject(SourceError("parse", "That file is not a SatPass credentials backup."));
+    return decryptCreds(o.blob, pass, c, o.v === 2 ? backupAad(o) : undefined).then(function (p) {   // v1 files (1.3.0/1.3.1) have no header binding and still import
       if (!p || typeof p !== "object" || !p.creds || typeof p.creds !== "object") throw SourceError("parse", "The backup is empty or damaged.");
       return { creds: p.creds, proxy: typeof p.proxy === "string" ? p.proxy : "" };
     }, function (e) { throw e.kind === "auth" ? SourceError("auth", "Wrong backup passphrase.") : e; });
@@ -362,6 +416,6 @@
     parseSpaceTrackGp: parseSpaceTrackGp, parseSatnogsTle: parseSatnogsTle, parseN2yoTle: parseN2yoTle, parseN2yoPasses: parseN2yoPasses, matchPasses: matchPasses,
     parseSatnogsTransmitters: parseSatnogsTransmitters, txToRadio: txToRadio, toneFromText: toneFromText, compareNominal: compareNominal,
     limitCheck: limitCheck, limitRecord: limitRecord, limitUsed: limitUsed, backoffMs: backoffMs, avoidBusyMinute: avoidBusyMinute, nextOkMinuteMs: nextOkMinuteMs,
-    encryptCreds: encryptCreds, decryptCreds: decryptCreds, wrapSecret: wrapSecret, unwrapSecret: unwrapSecret, validBioRecord: validBioRecord, exportBackup: exportBackup, importBackup: importBackup, BACKUP_APP: BACKUP_APP, normalizeVaultCfg: normalizeVaultCfg, lockDue: lockDue, VAULT_DEFAULT: VAULT_DEFAULT, fallbackMessage: fallbackMessage, kindWord: kindWord
+    encryptCreds: encryptCreds, decryptCreds: decryptCreds, wrapSecret: wrapSecret, unwrapSecret: unwrapSecret, validBioRecord: validBioRecord, sharedOrigin: sharedOrigin, createVault: createVault, openVault: openVault, openWithDek: openWithDek, sealVault: sealVault, validVault: validVault, vaultHeader: vaultHeader, exportBackup: exportBackup, importBackup: importBackup, BACKUP_APP: BACKUP_APP, normalizeVaultCfg: normalizeVaultCfg, lockDue: lockDue, VAULT_DEFAULT: VAULT_DEFAULT, fallbackMessage: fallbackMessage, kindWord: kindWord
   };
 });

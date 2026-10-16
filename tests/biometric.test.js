@@ -2,7 +2,7 @@
 // error mapping. The real authenticator path is exercised in tests/browser-vault.js with Chrome's virtual authenticator; nothing here has run on a real phone.
 const { ok, done } = require("./harness");
 const Bio = require("../js/biometric.js"), wc = require("crypto").webcrypto;
-const loc = { hostname: "theriotcoder.github.io" };
+const loc = { hostname: "satpass.example.com" };
 const PRFV = new Uint8Array(32).map((_, i) => i + 1);
 function mk(o = {}) {
   const calls = { create: [], get: [] };
@@ -24,7 +24,7 @@ const E = (n, m) => { const e = new Error(m || n); e.name = n; return e; };
   ok("localhost is allowed (dev / tests)", (await Bio.supported(mk({ loc: { hostname: "localhost" } }).env)).ok === true);
 
   const m = mk(), r = await Bio.enroll(m.env), pk = m.calls.create[0].publicKey;
-  ok("enroll: platform authenticator, user verification REQUIRED, rpId = page host, PRF eval requested, no attestation", pk.rp.id === "theriotcoder.github.io" && pk.authenticatorSelection.userVerification === "required" && pk.authenticatorSelection.authenticatorAttachment === "platform" && pk.extensions.prf.eval.first.length === 32 && pk.attestation === "none" && pk.pubKeyCredParams.some(p => p.alg === -7));
+  ok("enroll: platform authenticator, user verification REQUIRED, rpId = page host, PRF eval requested, no attestation", pk.rp.id === "satpass.example.com" && pk.authenticatorSelection.userVerification === "required" && pk.authenticatorSelection.authenticatorAttachment === "platform" && pk.extensions.prf.eval.first.length === 32 && pk.attestation === "none" && pk.pubKeyCredParams.some(p => p.alg === -7));
   ok("enroll: passkey is labelled as a vault key, not a login, and carries no personal data", /not a login/.test(pk.user.displayName) && pk.user.id.length === 16 && !/@/.test(pk.user.name));
   ok("enroll returns credId (base64url), prfSalt (matches the requested eval salt), rpId and the 32-byte PRF", r.credId === "AQID-vv8" && Buffer.from(r.prfSalt, "base64").equals(Buffer.from(pk.extensions.prf.eval.first)) && r.rpId === loc.hostname && r.prf.length === 32 && r.prf[0] === 1 && m.calls.get.length === 0);
   const rec = { credId: r.credId, prfSalt: r.prfSalt, rpId: r.rpId };
@@ -41,5 +41,10 @@ const E = (n, m) => { const e = new Error(m || n); e.name = n; return e; };
   let signalled = null; await Bio.forget(rec, mk({ PKC: { signalUnknownCredential: async x => { signalled = x; } } }).env);
   ok("forget(): best-effort signalUnknownCredential when available, harmless otherwise", signalled && signalled.rpId === rec.rpId && signalled.credentialId === rec.credId && (await Bio.forget(rec, mk().env)) === undefined);
   ok("base64url helpers round-trip", Buffer.from(Bio._unb64u(Bio._b64u(PRFV))).equals(Buffer.from(PRFV)));
+  // ---- 1.3.2
+  ok("shared origin: hidden on <user>.github.io and github.io (with a 'shared' flag and an explanation), allowed elsewhere", await (async () => { const a = await Bio.supported(mk({ loc: { hostname: "theriotcoder.github.io" } }).env), b = await Bio.supported(mk({ loc: { hostname: "github.io" } }).env), c = await Bio.supported(mk({ loc: { hostname: "myapp.netlify.app" } }).env), d = await Bio.supported(mk({ loc: { hostname: "satpass.example.com" } }).env); return a.ok === false && a.shared === true && /shared origin/.test(a.reason) && b.ok === false && c.ok === true && d.ok === true; })());
+  ok("enroll refuses on a shared origin before any prompt (no credentials.create call)", await (async () => { const s2 = mk({ loc: { hostname: "x.github.io" } }); const e = await Bio.enroll(s2.env).catch(x => x); return e.kind === "config" && /shared origin/.test(e.message) && s2.calls.create.length === 0; })());
+  ok("passkey is created non-discoverable (residentKey 'discouraged') so it does not show in other apps' passkey pickers", pk.authenticatorSelection.residentKey === "discouraged" && pk.authenticatorSelection.requireResidentKey === false);
+  ok("js/biometric.js no longer claims the shared-origin passkey is harmless (comment fixed)", !/useless without this app's wrapped record, which is itself encrypted/.test(require("fs").readFileSync(require("path").join(__dirname, "..", "js", "biometric.js"), "utf8")) && /SHARED-ORIGIN LIMIT/.test(require("fs").readFileSync(require("path").join(__dirname, "..", "js", "biometric.js"), "utf8")));
   done();
 })();

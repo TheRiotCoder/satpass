@@ -163,12 +163,12 @@ const creds = { stIdentity: "me@example.com", stPassword: "p@ss w/ord&=?#", satn
   {
     const wc = require("crypto").webcrypto, prf = () => wc.getRandomValues(new Uint8Array(32)), meta = { credId: "Y3JlZC1pZA", prfSalt: "c2FsdA==", rpId: "theriotcoder.github.io" };
     const P1 = prf(), rec = await Src.wrapSecret("my vault passphrase", P1, meta, wc);
-    ok("wrapSecret: record has no plaintext and carries the passkey id/salt/rpId", Src.validBioRecord(rec) && JSON.stringify(rec).indexOf("my vault passphrase") < 0 && rec.credId === meta.credId && rec.rpId === meta.rpId && rec.v === 1);
+    ok("wrapSecret: record has no plaintext and carries the passkey id/salt/rpId", Src.validBioRecord(rec) && JSON.stringify(rec).indexOf("my vault passphrase") < 0 && rec.credId === meta.credId && rec.rpId === meta.rpId && rec.v === 2);
     ok("unwrapSecret with the same PRF output returns the passphrase", (await Src.unwrapSecret(rec, P1, wc)) === "my vault passphrase");
     const bad = async (r, p) => { try { await Src.unwrapSecret(r, p, wc); return "no error"; } catch (e) { return e.kind; } };
     ok("a different PRF output (another authenticator / another salt) is rejected as 'auth'", (await bad(rec, prf())) === "auth");
     ok("the record is bound to rpId, credId and salt (AAD): editing any of them breaks decryption", (await bad(Object.assign({}, rec, { rpId: "evil.example" }), P1)) === "auth" && (await bad(Object.assign({}, rec, { credId: "AAAA" }), P1)) === "auth" && (await bad(Object.assign({}, rec, { prfSalt: "AAAA" }), P1)) === "auth");
-    ok("tampered ciphertext / short PRF / junk record are refused", (await bad(Object.assign({}, rec, { ct: rec.ct.slice(0, -4) + "AAAA" }), P1)) === "auth" && (await bad(rec, new Uint8Array(8))) === "config" && (await bad({ v: 1 }, P1)) === "config" && !Src.validBioRecord(null) && !Src.validBioRecord(Object.assign({}, rec, { v: 2 })));
+    ok("tampered ciphertext / short PRF / junk record are refused", (await bad(Object.assign({}, rec, { ct: rec.ct.slice(0, -4) + "AAAA" }), P1)) === "auth" && (await bad(rec, new Uint8Array(8))) === "config" && (await bad({ v: 1 }, P1)) === "config" && !Src.validBioRecord(null) && !Src.validBioRecord(Object.assign({}, rec, { v: 1 })) && !Src.validBioRecord(Object.assign({}, rec, { v: 3 })));
     ok("wrapping twice gives different ciphertexts (random IV/HKDF salt)", (await Src.wrapSecret("x".repeat(12), P1, meta, wc)).ct !== (await Src.wrapSecret("x".repeat(12), P1, meta, wc)).ct);
 
     const text = await Src.exportBackup({ stIdentity: "me@example.com", stPassword: "S3cret-pw!" }, "https://p.workers.dev", "backup passphrase 1", wc);
@@ -186,6 +186,41 @@ const creds = { stIdentity: "me@example.com", stPassword: "p@ss w/ord&=?#", satn
     ok("lockDue: idle threshold", L({ idleMin: 5, hiddenMin: 0 }, 5 * 60e3, 0, null) === "idle" && L({ idleMin: 5, hiddenMin: 0 }, 5 * 60e3 - 1, 0, null) === null);
     ok("lockDue: hidden threshold wins and applies only while hidden", L({ idleMin: 0, hiddenMin: 2 }, 120e3, 119e3, 0) === "hidden" && L({ idleMin: 0, hiddenMin: 2 }, 119e3, 119e3, 0) === null && L({ idleMin: 0, hiddenMin: 2 }, 9e9, 0, null) === null);
     ok("lockDue: 0 = off for both", L({ idleMin: 0, hiddenMin: 0 }, 9e12, 0, 0) === null);
+  }
+
+  // ---------- 1.3.2: padded wrap, async failures, vault v2, backup header AAD
+  {
+    const wc = require("crypto").webcrypto, prf = () => wc.getRandomValues(new Uint8Array(32)), meta = { credId: "Y3JlZA", prfSalt: "c2FsdA==", rpId: "satpass.example.com" }, P = prf();
+    const r1 = await Src.wrapSecret("short", P, meta, wc), r2 = await Src.wrapSecret("a much longer secret value with many more characters in it, 1234567890", P, meta, wc);
+    ok("wrap is padded: ciphertext length is identical for a 5-char and a 70-char secret (no length leak)", r1.ct.length === r2.ct.length && Buffer.from(r1.ct, "base64").length === 128 + 16 && (await Src.unwrapSecret(r1, P, wc)) === "short" && (await Src.unwrapSecret(r2, P, wc)).length === 70);
+    ok("a secret that cannot fit the padding is rejected, not truncated", (await Src.wrapSecret("x".repeat(200), P, meta, wc).catch(e => e)).kind === "config");
+    let sync = false, p1; try { p1 = Src.wrapSecret("x", new Uint8Array(4), meta, wc); } catch (e) { sync = true; }
+    ok("wrapSecret/unwrapSecret with a short PRF REJECT asynchronously (never throw synchronously)", sync === false && (await p1.catch(e => e)).kind === "config" && (await (() => { try { return Src.unwrapSecret(r1, new Uint8Array(4), wc).catch(e => e.kind); } catch (e) { return "sync-throw"; } })()) === "config");
+    ok("sharedOrigin(): github.io and every *.github.io; not custom domains, localhost, lookalikes", ["github.io", "theriotcoder.github.io", "A.B.GitHub.io", "x.github.io."].every(Src.sharedOrigin) && ["localhost", "satpass.example.com", "x.netlify.app", "github.io.example.com", "notgithub.io", "", null].every(h => !Src.sharedOrigin(h)));
+
+    const creds = { stIdentity: "me@example.com", stPassword: "S3cret-pw!" };
+    const v = await Src.createVault(creds, "vault passphrase 1", null, wc), blob = v.blob;
+    ok("createVault: {enc:2} with a random 32-byte data key; the passphrase only wraps the key; no plaintext", blob.enc === 2 && v.dek.length === 32 && blob.iter === 600000 && Src.validVault(blob) && !/me@example|S3cret/.test(JSON.stringify(blob)));
+    const o = await Src.openVault(blob, "vault passphrase 1", wc);
+    ok("openVault returns credentials + the same data key; openWithDek opens it without any passphrase", o.legacy === false && o.creds.stPassword === creds.stPassword && Buffer.from(o.dek).equals(Buffer.from(v.dek)) && (await Src.openWithDek(blob, v.dek, wc)).stIdentity === creds.stIdentity);
+    ok("wrong passphrase / wrong data key -> auth", (await Src.openVault(blob, "nope nope nope", wc).catch(e => e)).kind === "auth" && (await Src.openWithDek(blob, prf(), wc).catch(e => e)).kind === "auth");
+    const v2 = await Src.createVault(creds, "second passphrase 22", v.dek, wc);
+    ok("changing the passphrase = re-wrapping the SAME data key: new salt/wrapped key, same key, old passphrase refused", v2.blob.wk !== blob.wk && v2.blob.salt !== blob.salt && Buffer.from(v2.dek).equals(Buffer.from(v.dek)) && (await Src.openVault(v2.blob, "second passphrase 22", wc)).creds.stPassword === creds.stPassword && (await Src.openVault(v2.blob, "vault passphrase 1", wc).catch(e => e)).kind === "auth");
+    const sealed = await Src.sealVault({ n: 1 }, v.dek, Src.vaultHeader(blob), wc);
+    ok("sealVault keeps the wrapped key and header, fresh IV/ciphertext", sealed.wk === blob.wk && sealed.salt === blob.salt && sealed.iv !== blob.iv && (await Src.openVault(sealed, "vault passphrase 1", wc)).creds.n === 1);
+    const tamper = async (patch) => Src.openVault(Object.assign({}, blob, patch), "vault passphrase 1", wc).then(() => "opened", e => e.kind);
+    ok("header fields are authenticated: changed salt / iter / wrapped key / ciphertext all fail", (await tamper({ salt: "AAAAAAAAAAAAAAAAAAAAAA==" })) === "auth" && (await tamper({ iter: 123456 })) === "auth" && (await tamper({ wk: blob.wk.slice(0, -4) + "AAAA" })) === "auth" && (await tamper({ ct: blob.ct.slice(0, -4) + "AAAA" })) === "auth" && (await tamper({ iter: 4e9 })) === "auth");
+    const leg = await Src.encryptCreds(creds, "legacy pass 1234", wc);
+    const lo = await Src.openVault(leg, "legacy pass 1234", wc);
+    ok("openVault reads a legacy {enc:1} blob (1.2.x/1.3.x) and flags it for migration", lo.legacy === true && lo.dek === null && lo.creds.stPassword === creds.stPassword);
+
+    // backup header authentication
+    const text = await Src.exportBackup(creds, "https://p.workers.dev", "backup passphrase 1", wc), parsed = JSON.parse(text);
+    ok("backup is v2 and still round-trips", parsed.v === 2 && (await Src.importBackup(text, "backup passphrase 1", wc)).proxy === "https://p.workers.dev");
+    const mod = f => JSON.stringify(Object.assign({}, parsed, f)), imp = t => Src.importBackup(t, "backup passphrase 1", wc).then(() => "imported", e => e.kind);
+    ok("backup header is bound as AAD: editing created / note / app-version fails to import", (await imp(mod({ created: "2000-01-01T00:00:00.000Z" }))) === "auth" && (await imp(mod({ note: "edited" }))) === "auth" && (await imp(mod({ v: 1 }))) === "auth");
+    const v1 = JSON.stringify({ app: Src.BACKUP_APP, v: 1, created: "2026-10-16T00:00:00Z", note: "old", blob: await Src.encryptCreds({ creds, proxy: "" }, "backup passphrase 1", wc) });
+    ok("older v1 backups (no header binding) still import", (await Src.importBackup(v1, "backup passphrase 1", wc)).creds.stPassword === creds.stPassword);
   }
   done();
 })();

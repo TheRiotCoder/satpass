@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.3.1";
+  var DAY = 86400000, APP_VERSION = "1.3.2";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -200,7 +200,9 @@
       var box = $("#bioBox", el), slot = $("#bioUnlockSlot", el), info = SS.bioInfo(), locked = SS.isLocked();
       if (!window.SatBio) return;
       SatBio.supported().then(function (sup) {
-        if (!document.body.contains(box) || !sup.ok && !info) return;   // (the card may have been re-rendered while we asked)
+        if (!document.body.contains(box)) return;   // (the card may have been re-rendered while we asked)
+        if (sup.shared) { box.innerHTML = '<p class="note" id="bioShared">🔒 <b>Biometric unlock is not offered on this address</b> (' + esc(location.hostname) + '). Every app under this host shares the same browser storage and passkeys, so another app could use the biometric key to read the unlock record. To get Face ID / fingerprint unlock, host SatPass on its own origin (a Netlify site, a custom domain or localhost) – see “Hosting SatPass on its own origin” in the README. Your passphrase works everywhere.</p>'; return; }
+        if (!sup.ok && !info) return;
         function msg(t) { var m = $("#passMsg", el); if (m) m.textContent = t; }
         if (locked && info && sup.ok) {
           slot.innerHTML = '<button type="button" class="btn sm primary" id="bioUnlock">🔓 Unlock with biometrics</button>';
@@ -274,7 +276,13 @@
         ev.preventDefault(); var m = $("#bkMsg", el), f = $("#bkFile", el).files && $("#bkFile", el).files[0], pw = $("#bkPass2", el).value;
         if (!f) { m.textContent = "✖ Choose a backup file first."; return; }
         if (f.size > 100000) { m.textContent = "✖ That file is too large to be a SatPass backup."; return; }
-        f.text().then(function (text) { return SS.importBackup(text, pw); }).then(function (r) {
+        function sure(i) {   // a crafted backup could overwrite credentials or repoint the proxy: always ask first, and name the proxy host
+          var lines = ["Import this backup?"];
+          if (i.overwrites.length) lines.push("• It replaces " + i.overwrites.length + " credential value(s) you already have.");
+          if (i.proxyChanged) lines.push("• It sets the proxy URL to " + i.proxyHost + (i.currentProxy ? " (now: " + i.currentProxy.replace(/^https?:\/\//, "") + ")" : " (none set now)") + ". Your logins and tokens will be sent to that host – only continue if it is YOUR proxy.");
+          return confirm(lines.join("\n"));
+        }
+        f.text().then(function (text) { return SS.importBackup(text, pw, sure); }).then(function (r) {
           render(); $("#bkMsg", el).textContent = "✔ Imported " + r.imported + " credential value(s)" + (r.proxy ? " and the proxy URL" : "") + (SS.hasPassphrase() ? " (stored encrypted on this device)." : " (kept for this tab only – set a passphrase in section 3 to keep them).");
         }, function (e) { m.textContent = "✖ " + e.message; });
       };
@@ -975,7 +983,7 @@
     nb.onclick = function () { ensureNotifPermission().then(function (p) { notifState(); if (p === "granted") notify("SatPass test", "Notifications work while the app is running.", "./#/settings"); }); };
     notifState();
     renderInstallCard();
-    $("#resetBtn").onclick = function () { if (confirm("Reset location, favorites and preferences on this device? (Downloaded TLEs, data-source settings and stored credentials are kept – use “Forget credentials” in Data sources to remove those.)")) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("satpass:") === 0 && ["satpass:tle", "satpass:tlemeta", "satpass:groups", "satpass:catmeta", "satpass:lookups", "satpass:lookupmeta", "satpass:sources", "satpass:creds", "satpass:srcstatus", "satpass:srclimit", "satpass:txlive", "satpass:n2yocache"].indexOf(k) < 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (e) {} location.hash = "#/"; location.reload(); } };
+    $("#resetBtn").onclick = function () { if (confirm("Reset location, favorites and preferences on this device? (Downloaded TLEs, data-source settings, stored credentials, the biometric unlock record and auto-lock settings are kept – use “Forget credentials” in Data sources to remove those.)")) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("satpass:") === 0 && ["satpass:tle", "satpass:tlemeta", "satpass:groups", "satpass:catmeta", "satpass:lookups", "satpass:lookupmeta", "satpass:sources", "satpass:creds", "satpass:srcstatus", "satpass:srclimit", "satpass:txlive", "satpass:n2yocache", "satpass:bio", "satpass:vault", "satpass:credhint"].indexOf(k) < 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (e) {} location.hash = "#/"; location.reload(); } };
     if (window.caches) caches.keys().then(function (ks) { var k = ks.filter(function (x) { return x.indexOf("satpass-") === 0; })[0]; if (k && $("#swVer")) $("#swVer").textContent = "· cache " + k; });
   };
 

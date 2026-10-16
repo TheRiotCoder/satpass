@@ -17,7 +17,7 @@ function load(opts = {}) {
     crypto: require("crypto").webcrypto, btoa: s => Buffer.from(s, "binary").toString("base64"), atob: s => Buffer.from(s, "base64").toString("binary"),
     localStorage: { getItem: k => (k in ls ? ls[k] : null), setItem: (k, v) => { if (opts.quota && opts.quota(k)) { const e = new Error("full"); e.name = "QuotaExceededError"; throw e; } ls[k] = String(v); }, removeItem: k => { delete ls[k]; } },
     sessionStorage: opts.noSession ? undefined : { getItem: k => (k in ss ? ss[k] : null), setItem: (k, v) => { ss[k] = String(v); }, removeItem: k => { delete ss[k]; } },
-    navigator: { onLine: true }, AbortController, clearTimeout,
+    navigator: { onLine: true }, AbortController, clearTimeout, location: opts.location,
     setTimeout: (fn, ms) => (ms === 1200 || ms === 2000 ? (Promise.resolve().then(fn), 0) : setTimeout(fn, ms)),
     fetch: (url, init) => { url = String(url); reqs.push({ url, init: init || {} }); const r = (opts.fetch || (() => resp(500, "unstubbed")))(url, init || {}, reqs.length); return r instanceof Error ? Promise.reject(r) : Promise.resolve(r); }
   };
@@ -184,7 +184,7 @@ const setup = (S, enable) => { S.sources.setConfig({ proxy: PROXY, enabled: enab
     await setup(A.S, { spacetrack: true });
     await A.S.sources.lock("only-me-123");
     const raw = A.ls["satpass:creds"];
-    ok("passphrase: stored blob is AES-GCM ciphertext with no plaintext credential", /"enc":1/.test(raw) && SECRETVALS.every(s => raw.indexOf(s) < 0) && A.S.sources.hasPassphrase());
+    ok("passphrase: stored blob is AES-GCM ciphertext with no plaintext credential", /"enc":2/.test(raw) && SECRETVALS.every(s => raw.indexOf(s) < 0) && A.S.sources.hasPassphrase());
     const B = load({ ls: A.ls, fetch: (u) => health(u) || stOk(u) || resp(404, "") });
     ok("after reload credentials are LOCKED: sources not ready (reason 'locked'), nothing sent", B.S.sources.isLocked() && B.S.sources.readiness("spacetrack").kind === "locked" && Object.keys(B.S.sources.getCreds()).length === 0);
     B.S.sources.setConfig({ enabled: { celestrak: false } });
@@ -251,7 +251,7 @@ const setup = (S, enable) => { S.sources.setConfig({ proxy: PROXY, enabled: enab
     const A = load({ ls: Object.assign({}, legacy), fetch: (u) => health(u) || resp(404, "") });
     ok("1.2.0 plaintext credentials are still usable and flagged 'legacy-plain' (UI offers to encrypt or remove)", A.S.sources.credMode() === "legacy-plain" && A.S.sources.getCreds().stPassword === CRED.stPassword && A.S.sources.readiness("spacetrack").ready);
     await A.S.sources.lock("a-long-passphrase");
-    ok("encrypting migrates it: localStorage holds only ciphertext, mode 'encrypted'", /"enc":1/.test(A.ls["satpass:creds"]) && SECRETVALS.every(v => A.ls["satpass:creds"].indexOf(v) < 0) && A.S.sources.credMode() === "encrypted" && JSON.parse(A.ls["satpass:creds"]).iter >= 600000);
+    ok("encrypting migrates it: localStorage holds only ciphertext, mode 'encrypted'", /"enc":2/.test(A.ls["satpass:creds"]) && SECRETVALS.every(v => A.ls["satpass:creds"].indexOf(v) < 0) && A.S.sources.credMode() === "encrypted" && JSON.parse(A.ls["satpass:creds"]).iter >= 600000);
     const B = load({ ls: Object.assign({}, legacy) });
     await B.S.sources.dropPlaintextCopy();
     ok("'remove the saved plaintext copy' keeps creds for this tab but deletes the localStorage copy", !("satpass:creds" in B.ls) && B.S.sources.credMode() === "session" && /stIdentity/.test(B.ss["satpass:creds"]));
@@ -359,47 +359,100 @@ const setup = (S, enable) => { S.sources.setConfig({ proxy: PROXY, enabled: enab
     ok("N2YO radiopasses: stops locally at 90/hour (free limit 100)", last && !last.ok && proxied(reqs, "/n2yo/radiopasses").length === 90 && /Local rate limit/.test(last.message), last && last.message);
   }
   // ---------- 1.3.0: auto-lock, biometric second door (stub PRF), encrypted backup
+  const Src2 = require("../js/sources.js");
   {
     const wc = require("crypto").webcrypto, PRF = wc.getRandomValues(new Uint8Array(32)), META = { credId: "Y3JlZA", prfSalt: "c2FsdA==", rpId: "theriotcoder.github.io" };
     const A = load({}); await A.S.sources.setCreds({ stIdentity: "u@example.com", stPassword: "Pw-for-lock-test-1" });
     ok("session-only credentials cannot be locked (lockNow is a no-op; nothing would be recoverable)", A.S.sources.lockNow() === false && A.S.sources.getCreds().stPassword === "Pw-for-lock-test-1");
-    ok("biometric enrol needs an encrypted vault first", (await A.S.sources.bioSave(META, PRF).catch(e => e)).kind === "config");
+    ok("biometric enrol needs an encrypted vault first", (await A.S.sources.bioSave(META, PRF.slice()).catch(e => e)).kind === "config");
     await A.S.sources.lock("a-long-passphrase-1");
     ok("lockNow on an encrypted vault: memory emptied, mode 'locked', setCreds refused, readiness 'locked'", A.S.sources.lockNow() === true && A.S.sources.isLocked() && Object.keys(A.S.sources.getCreds()).length === 0 && A.S.sources.credMode() === "locked" && (await A.S.sources.setCreds({ n2yoKey: "zzzzzzzz" }).catch(e => e)).kind === "locked" && A.S.sources.readiness("spacetrack").kind === "locked");
-    ok("lockNow keeps the encrypted blob (nothing in localStorage is plaintext, nothing was deleted)", /"enc":1/.test(A.ls["satpass:creds"]) && !/Pw-for-lock-test/.test(JSON.stringify(A.ls)) && A.S.sources.lockNow() === false);
+    ok("lockNow keeps the encrypted blob (nothing in localStorage is plaintext, nothing was deleted)", /"enc":2/.test(A.ls["satpass:creds"]) && !/Pw-for-lock-test/.test(JSON.stringify(A.ls)) && A.S.sources.lockNow() === false);
     await A.S.sources.unlock("a-long-passphrase-1");
     ok("unlock with the passphrase restores the credentials after an auto-lock", A.S.sources.getCreds().stPassword === "Pw-for-lock-test-1" && !A.S.sources.isLocked());
     ok("vault config persists and is clamped", (() => { A.S.sources.setVaultCfg({ idleMin: 30, hiddenMin: 99999 }); const B = load({ ls: A.ls }); return B.S.sources.vaultCfg().idleMin === 30 && B.S.sources.vaultCfg().hiddenMin === 720 && load({}).S.sources.vaultCfg().idleMin === 15; })());
 
     // biometric
-    const bi = await A.S.sources.bioSave(META, PRF);
+    const bi = await A.S.sources.bioSave(META, PRF.slice());
     ok("bioSave stores a wrapped record (no passphrase / credential plaintext in localStorage) and reports info", !!bi && bi.rpId === META.rpId && !!A.ls["satpass:bio"] && !/a-long-passphrase|Pw-for-lock/.test(JSON.stringify(A.ls)));
     A.S.sources.lockNow();
     let asked = null;
-    await A.S.sources.bioUnlock(rec => { asked = rec; return PRF; });
-    ok("bioUnlock: asks for the PRF of the stored record, then opens the vault; passphrase kept in memory so later edits re-encrypt", asked && asked.credId === META.credId && !A.S.sources.isLocked() && A.S.sources.getCreds().stIdentity === "u@example.com" && (await A.S.sources.setCreds({ n2yoKey: "N2-after-bio-1" }).then(() => true)) && /"enc":1/.test(A.ls["satpass:creds"]));
+    await A.S.sources.bioUnlock(rec => { asked = rec; return PRF.slice(); });
+    ok("bioUnlock: asks for the PRF of the stored record, then opens the vault; passphrase kept in memory so later edits re-encrypt", asked && asked.credId === META.credId && !A.S.sources.isLocked() && A.S.sources.getCreds().stIdentity === "u@example.com" && (await A.S.sources.setCreds({ n2yoKey: "N2-after-bio-1" }).then(() => true)) && /"enc":2/.test(A.ls["satpass:creds"]));
     const wrong = await (async () => { A.S.sources.lockNow(); return A.S.sources.bioUnlock(() => wc.getRandomValues(new Uint8Array(32))).catch(e => e); })();
     ok("wrong PRF output / cancelled prompt: stays locked, clear error, passphrase still works", wrong.kind === "auth" && A.S.sources.isLocked() && (await A.S.sources.bioUnlock(() => Promise.reject(new Error("cancelled"))).catch(e => e.message)) === "cancelled" && (await A.S.sources.unlock("a-long-passphrase-1")) === true);
-    ok("changing the passphrase drops the (now stale) biometric record", (await A.S.sources.lock("another-long-passphrase-2"), !A.ls["satpass:bio"]));
-    await A.S.sources.bioSave(META, PRF);
+    const blobBefore = JSON.parse(A.ls["satpass:creds"]);
+    await A.S.sources.lock("another-long-passphrase-2");
+    const blobAfter = JSON.parse(A.ls["satpass:creds"]);
+    ok("1.3.2 changing the passphrase re-wraps only the data key: wrapped key + salt change, the biometric record stays valid", blobAfter.wk !== blobBefore.wk && blobAfter.salt !== blobBefore.salt && !!A.ls["satpass:bio"] && A.S.sources.bioInfo() !== null);
+    A.S.sources.lockNow();
+    ok("1.3.2 …the old passphrase no longer opens it, the new one does, and biometric unlock (PRF → data key) still works after the change", (await A.S.sources.unlock("a-long-passphrase-1").catch(e => e.kind)) === "auth" && (await A.S.sources.bioUnlock(() => PRF.slice())) === true && A.S.sources.getCreds().stPassword === "Pw-for-lock-test-1" && (A.S.sources.lockNow(), (await A.S.sources.unlock("another-long-passphrase-2")) === true));
+    ok("1.3.2 the passphrase is nowhere in memory-facing state: the bio record unwraps to a 32-byte data key, not to the passphrase", await (async () => { const rec = JSON.parse(A.ls["satpass:bio"]); const dek = await Src2.unwrapSecret(rec, PRF.slice()); return Buffer.from(dek, "base64").length === 32 && dek.indexOf("passphrase") < 0 && rec.v === 2; })());
+
+    await A.S.sources.bioSave(META, PRF.slice());
     await A.S.sources.removePassphrase();
     ok("removing the passphrase drops the biometric record", !A.ls["satpass:bio"] && A.S.sources.bioInfo() === null);
-    await A.S.sources.lock("third-long-passphrase-3"); await A.S.sources.bioSave(META, PRF); A.S.sources.forgetCreds();
+    await A.S.sources.lock("third-long-passphrase-3"); await A.S.sources.bioSave(META, PRF.slice()); A.S.sources.forgetCreds();
     ok("Forget credentials also removes the biometric record", !A.ls["satpass:bio"]);
-    await A.S.sources.setCreds({ n2yoKey: "k-12345678" }); await A.S.sources.lock("fourth-long-passphrase-4"); await A.S.sources.bioSave(META, PRF);
+    await A.S.sources.setCreds({ n2yoKey: "k-12345678" }); await A.S.sources.lock("fourth-long-passphrase-4"); await A.S.sources.bioSave(META, PRF.slice());
     ok("a damaged biometric record is ignored (no biometric option, no crash)", (() => { const ls = Object.assign({}, A.ls); ls["satpass:bio"] = '{"v":1,"credId":5}'; return load({ ls }).S.sources.bioInfo() === null; })());
 
     // backup
     const B = load({}); await B.S.sources.setCreds({ stIdentity: "mv@example.com", stPassword: "Move-Me-Pw-1", proxyToken: "tok-12345678" }); B.S.sources.setConfig({ proxy: PROXY });
     const text = await B.S.sources.exportBackup("backup-passphrase-1");
     ok("store.exportBackup: encrypted file text without plaintext", !/mv@example|Move-Me|tok-12345678/.test(text) && JSON.parse(text).app === "satpass-credentials-backup");
-    const C = load({}), r = await C.S.sources.importBackup(text, "backup-passphrase-1");
+    const C = load({}), r = await C.S.sources.importBackup(text, "backup-passphrase-1", () => true);
     ok("importBackup on a fresh device: credentials + proxy URL arrive (session-only until a passphrase is set), nothing plaintext in localStorage", r.imported === 3 && r.proxy && C.S.sources.getCreds().stPassword === "Move-Me-Pw-1" && C.S.sources.config().proxy === PROXY && C.S.sources.credMode() === "session" && !/Move-Me/.test(JSON.stringify(C.ls)));
     ok("wrong backup passphrase changes nothing", (await load({}).S.sources.importBackup(text, "wrong-pass-123").catch(e => e)).kind === "auth");
     const D = load({}); await D.S.sources.setCreds({ n2yoKey: "k-12345678" }); await D.S.sources.lock("fifth-long-passphrase-5"); D.S.sources.lockNow();
     ok("export and import are refused while locked", (await D.S.sources.exportBackup("backup-passphrase-1").catch(e => e)).kind === "locked" && (await D.S.sources.importBackup(text, "backup-passphrase-1").catch(e => e)).kind === "locked");
     const E = load({}); await E.S.sources.lock("sixth-long-passphrase-6").catch(() => 0);
-    ok("importing into an encrypted vault stores the imported values encrypted", await (async () => { const F = load({}); await F.S.sources.setCreds({ n2yoKey: "seed-1234567" }); await F.S.sources.lock("sixth-long-passphrase-6"); await F.S.sources.importBackup(text, "backup-passphrase-1"); return F.S.sources.getCreds().stPassword === "Move-Me-Pw-1" && !/Move-Me/.test(JSON.stringify(F.ls)) && /"enc":1/.test(F.ls["satpass:creds"]); })());
+    ok("importing into an encrypted vault stores the imported values encrypted", await (async () => { const F = load({}); await F.S.sources.setCreds({ n2yoKey: "seed-1234567" }); await F.S.sources.lock("sixth-long-passphrase-6"); await F.S.sources.importBackup(text, "backup-passphrase-1", () => true); return F.S.sources.getCreds().stPassword === "Move-Me-Pw-1" && !/Move-Me/.test(JSON.stringify(F.ls)) && /"enc":2/.test(F.ls["satpass:creds"]); })());
+  }
+  // ---------- 1.3.2: shared-origin purge, legacy vault migration, data-key vault, backup import confirmation
+  {
+    const wc = require("crypto").webcrypto, Src3 = require("../js/sources.js"), PRF = wc.getRandomValues(new Uint8Array(32)), META = { credId: "Y3JlZA", prfSalt: "c2FsdA==", rpId: "satpass.example.com" };
+    // 1.3.0/1.3.1 record (v:1, wrapped the PASSPHRASE) + shared host: deleted on load
+    const old = { v: 1, credId: "Y3JlZA", prfSalt: "c2FsdA==", rpId: "theriotcoder.github.io", created: 1, hk: "AAAA", iv: "AAAA", ct: "AAAA" };
+    const sh = load({ ls: { "satpass:bio": JSON.stringify(old) }, location: { hostname: "theriotcoder.github.io" } });
+    ok("1.3.2: an existing satpass:bio record is deleted on load on a shared github.io origin", !("satpass:bio" in sh.ls) && sh.S.sources.bioInfo() === null && sh.S.sources.bioAllowed() === false);
+    const shp = load({ ls: { "satpass:bio": JSON.stringify(Object.assign({}, old, { v: 2 })) }, location: { hostname: "someone.github.io" } });
+    ok("1.3.2: …also for any other <user>.github.io host, even for a well-formed v2 record", !("satpass:bio" in shp.ls) && shp.S.sources.bioAllowed() === false);
+    const loc = load({ ls: { "satpass:bio": JSON.stringify(old) }, location: { hostname: "localhost" } });
+    ok("1.3.2: an old v1 record (it wrapped the passphrase) is deleted on load even where biometrics are allowed (localhost)", !("satpass:bio" in loc.ls) && loc.S.sources.bioAllowed() === true);
+    ok("1.3.2: biometrics stay allowed on a custom domain, Netlify and localhost; blocked only on github.io hosts", ["satpass.example.com", "myapp.netlify.app", "localhost", "notgithub.io.example.com", "github.io.evil.com"].every(h => load({ location: { hostname: h } }).S.sources.bioAllowed()) && !load({ location: { hostname: "x.github.io" } }).S.sources.bioAllowed() && !load({ location: { hostname: "GITHUB.IO" } }).S.sources.bioAllowed());
+    const shared = load({ location: { hostname: "theriotcoder.github.io" } }); await shared.S.sources.setCreds({ n2yoKey: "k-12345678" }); await shared.S.sources.lock("long-passphrase-abc");
+    ok("1.3.2: bioSave is refused on a shared origin (and stores nothing)", (await shared.S.sources.bioSave(META, PRF.slice()).catch(e => e)).kind === "config" && !("satpass:bio" in shared.ls));
+
+    // vault v2 format + legacy migration
+    const V = load({}); await V.S.sources.setCreds({ stIdentity: "u@e.com", stPassword: "Pw-vault-v2-1" }); await V.S.sources.lock("passphrase-one-123");
+    const b2 = JSON.parse(V.ls["satpass:creds"]);
+    ok("1.3.2: new vaults are {enc:2}: random data key wrapped by the passphrase key (wk), credentials under the data key; no plaintext", b2.enc === 2 && !!b2.wk && !!b2.wiv && b2.iter === 600000 && !/Pw-vault-v2|u@e\.com|passphrase-one/.test(V.ls["satpass:creds"]));
+    V.S.sources.lockNow(); await V.S.sources.unlock("passphrase-one-123");
+    ok("1.3.2: ordinary edits keep the same wrapped key (only the ciphertext changes)", await (async () => { const w = JSON.parse(V.ls["satpass:creds"]).wk, c0 = JSON.parse(V.ls["satpass:creds"]).ct; await V.S.sources.setCreds({ n2yoKey: "k-edit-1234567" }); const n = JSON.parse(V.ls["satpass:creds"]); return n.wk === w && n.ct !== c0; })());
+    const legacy = await Src3.encryptCreds({ stIdentity: "old@e.com", stPassword: "Old-Pw-1.3.1" }, "legacy-passphrase-1", wc);
+    const M = load({ ls: { "satpass:creds": JSON.stringify(legacy) } });
+    ok("1.3.2: a 1.2.x/1.3.x {enc:1} blob loads locked and a wrong passphrase is refused", M.S.sources.isLocked() && (await M.S.sources.unlock("not-the-passphrase").catch(e => e.kind)) === "auth" && JSON.parse(M.ls["satpass:creds"]).enc === 1);
+    await M.S.sources.unlock("legacy-passphrase-1");
+    ok("1.3.2: unlocking a legacy blob migrates it to the data-key format on the spot (still unlocked, same credentials)", !M.S.sources.isLocked() && M.S.sources.getCreds().stPassword === "Old-Pw-1.3.1" && JSON.parse(M.ls["satpass:creds"]).enc === 2 && !/Old-Pw/.test(M.ls["satpass:creds"]));
+    const M2 = load({ ls: M.ls });
+    ok("1.3.2: …and the migrated blob opens with the same passphrase after a reload", (await M2.S.sources.unlock("legacy-passphrase-1")) === true && M2.S.sources.getCreds().stIdentity === "old@e.com");
+    ok("1.3.2: a legacy blob whose migration cannot be saved (quota) stays readable and unlocked in memory", await (async () => { const Q = load({ ls: { "satpass:creds": JSON.stringify(legacy) }, quota: k => k === "satpass:creds" }); await Q.S.sources.unlock("legacy-passphrase-1"); return !Q.S.sources.isLocked() && Q.S.sources.getCreds().stPassword === "Old-Pw-1.3.1" && JSON.parse(Q.ls["satpass:creds"]).enc === 1; })());
+    ok("1.3.2: a tampered wrapped key / ciphertext / header is rejected (AES-GCM + AAD)", await (async () => { const bad = async (patch) => { const T = load({ ls: { "satpass:creds": JSON.stringify(Object.assign({}, b2, patch)) } }); return T.S.sources.unlock("passphrase-one-123").then(() => "opened", e => e.kind); }; return (await bad({})) === "opened" && (await bad({ wk: b2.wk.slice(0, -4) + "AAAA" })) === "auth" && (await bad({ ct: b2.ct.slice(0, -4) + "AAAA" })) === "auth" && (await bad({ salt: "AAAAAAAAAAAAAAAAAAAAAA==" })) === "auth" && (await bad({ iter: 150000 })) === "auth"; })());
+
+    // backup import confirmation
+    const B = load({}); await B.S.sources.setCreds({ stIdentity: "mv@example.com", stPassword: "Move-Me-Pw-2" }); B.S.sources.setConfig({ proxy: "https://good.workers.dev" });
+    const text = await B.S.sources.exportBackup("backup-passphrase-2");
+    const T = load({}); await T.S.sources.setCreds({ stPassword: "Existing-Pw-keep-me", stIdentity: "mine@example.com" }); T.S.sources.setConfig({ proxy: "https://mine.workers.dev" });
+    let seen = null;
+    const declined = await T.S.sources.importBackup(text, "backup-passphrase-2", i => { seen = i; return false; }).catch(e => e);
+    ok("1.3.2: import asks first when it would overwrite credentials or change the proxy; the question names the new proxy host and what is replaced", seen && seen.proxyChanged && seen.proxyHost === "good.workers.dev" && seen.currentProxy === "https://mine.workers.dev" && seen.overwrites.sort().join() === "stIdentity,stPassword");
+    ok("1.3.2: declining changes nothing (credentials and proxy URL untouched)", declined.kind === "cancelled" && T.S.sources.getCreds().stPassword === "Existing-Pw-keep-me" && T.S.sources.config().proxy === "https://mine.workers.dev");
+    ok("1.3.2: with no confirm callback a conflicting import is refused (safe default)", (await T.S.sources.importBackup(text, "backup-passphrase-2").catch(e => e)).kind === "cancelled" && T.S.sources.getCreds().stPassword === "Existing-Pw-keep-me");
+    const done2 = await T.S.sources.importBackup(text, "backup-passphrase-2", () => true);
+    ok("1.3.2: confirming applies it", done2.imported === 2 && done2.proxy === true && done2.overwrote === 2 && T.S.sources.getCreds().stPassword === "Move-Me-Pw-2" && T.S.sources.config().proxy === "https://good.workers.dev");
+    const same = await T.S.sources.importBackup(text, "backup-passphrase-2", () => { throw new Error("must not ask"); });
+    ok("1.3.2: re-importing identical data needs no question", same.imported === 2);
   }
   done();
 })();
