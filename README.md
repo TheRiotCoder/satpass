@@ -67,6 +67,11 @@ Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry,
 - **Still open at the end:** the pass is kept and LOS is searched past the window end until it really ends (bounded by `maxOverrunMs`, default 14 h, enough for AO-10-style passes); `losAfterWindow = true`.
 - **LOS (or AOS) not found within the limit:** the pass is kept, the time is a lower bound and `truncated = true` (`aosTruncated` for the AOS side). The app shows "LOS ≥" on the list and a warning on the detail page.
 
+## Release notes
+
+- **1.0.2** – Fix: on the Doppler tab, choosing a radio/mode other than the first (e.g. ISS voice repeater) made the live Tune/Transmit readout flicker back to the first radio's (APRS 145.825 MHz) frequencies. Cause: selects re-rendered the view by calling the route function directly, which left the previous render's 1 s timer running; it kept overwriting the new DOM with the old radio. Views are now re-rendered through `rerender()` (clears the old timers) and every timer is bound to its view. Regression tests: `tests/radio.test.js` and the "Doppler radio selection must stick" block in the browser smoke test.
+- 1.0.1 – findPasses window-edge fixes, finer scan, strict longitude validation.
+
 ## Tests
 
 ```

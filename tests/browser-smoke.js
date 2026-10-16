@@ -168,6 +168,44 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   check('Doppler no overflow', await noOverflow());
   await shot('06-doppler', true);
 
+  // ---- Doppler radio selection must stick (regression: a stale 1 s timer from the previous render overwrote the chosen radio with the default)
+  const holdSel = (ms) => ev(`(async () => { const out = []; const end = Date.now() + ${ms}; while (Date.now() < end) { out.push({ sel: (document.querySelector('#dRadio')||{}).value, nom: document.querySelector('#dNominal').textContent, big: [...document.querySelectorAll('.dopp-big b')].map(b => b.textContent), subs: [...document.querySelectorAll('.dopp-big span')].map(b => b.textContent), title: document.querySelector('section.card h2').textContent }); await new Promise(r => setTimeout(r, 120)); } return out; })()`);
+  const mhzOf = t => parseFloat(t);
+  const near = (v, c, tolKHz) => Math.abs(v - c) * 1000 <= tolKHz;
+  await go('#/doppler/25544'); await sleep(1500);
+  const issRadios = await ev(`[...document.querySelectorAll('#dRadio option')].map(o => o.textContent)`);
+  check('Doppler: ISS offers 3 radios (APRS, voice repeater, SSTV)', issRadios.length === 3, issRadios);
+  const expect = [ // [select index, nominal up MHz, nominal down MHz, tolerance kHz]
+    [0, 145.825, 145.825], [1, 145.990, 437.800], [2, null, 145.800]];
+  for (const [idx, up, down] of expect) {
+    await ev(setVal('#dRadio', String(idx))); await sleep(300);
+    const samples = await holdSel(4500);   // > 4 live ticks, sampled every 120 ms
+    const okSel = samples.every(x => x.sel === String(idx));
+    const okNom = samples.every(x => (up == null || x.nom.includes(up.toFixed(4))) && x.nom.includes(down.toFixed(4)) && (up != null || !/uplink/.test(x.nom)));
+    const okLive = samples.every(x => { const b = x.big.map(mhzOf); return b.length === (up == null ? 1 : 2) && near(b[0], down, 12) && (up == null || near(b[1], up, 12)); });
+    const okSub = samples.every(x => x.subs.every(t => up == null ? t.includes(down.toFixed(4)) : (t.includes(down.toFixed(4)) || t.includes(up.toFixed(4)))));
+    check(`Doppler ISS radio #${idx}: selection, nominal and corrected freqs stay on the chosen radio for 4.5 s (${samples.length} samples)`, okSel && okNom && okLive && okSub, okSel && okNom && okLive && okSub ? undefined : samples.filter(x => x.sel !== String(idx) || !x.nom.includes(down.toFixed(4)) || !x.big.every((v, i) => near(mhzOf(v), i ? up : down, 12))).slice(0, 3));
+    check(`Doppler ISS radio #${idx}: persisted in localStorage`, await ev(`localStorage.getItem('satpass:dopRadio:25544')`) === String(idx));
+  }
+  // table follows the chosen radio too (SSTV is downlink-only -> no Tx columns)
+  check('Doppler ISS SSTV: table has Rx columns only', await ev(`[...document.querySelectorAll('#dTbl thead th')].map(t => t.textContent).join('|')`) === 'Time|El|Rate km/s|Rx MHz|Rx Δ Hz');
+  // voice repeater again; then leave and come back / switch satellites / TLE refresh
+  await ev(setVal('#dRadio', '1')); await sleep(400);
+  await go('#/live/25544'); await sleep(800); await go('#/doppler/25544'); await sleep(1500);
+  let h = await holdSel(2500);
+  check('Doppler: radio choice survives leaving the tab and coming back', h.every(x => x.sel === '1' && x.nom.includes('437.8000') && near(mhzOf(x.big[0]), 437.8, 12)), h[0]);
+  await ev(setVal('#dSat', '7530')); await sleep(1200);
+  await ev(setVal('#dRadio', '1')); await sleep(300);   // AO-7: mode A (index 1)
+  h = await holdSel(3000);
+  check('Doppler AO-7 (2 modes): mode A stays selected over several ticks', h.every(x => x.sel === '1' && x.nom.includes('145.8') && x.nom.includes('29.')), h[0] && h[0].nom);
+  await ev(setVal('#dSat', '25544')); await sleep(1500);
+  h = await holdSel(2500);
+  check('Doppler: switching satellites and back restores each satellite\'s own radio (ISS #1, not reset to #0)', h.every(x => x.sel === '1' && near(mhzOf(x.big[0]), 437.8, 12)) && (await ev(`localStorage.getItem('satpass:dopRadio:7530')`)) === '1', h[0]);
+  const issE = await ev(`(() => { const e = SatStore.data.byId[25544]; return { l1: e.l1, l2: e.l2 }; })()`);
+  await ev(`SatStore.importText(${JSON.stringify('ISS (ZARYA)\n' + '')} + ${JSON.stringify(issE.l1 + '\n' + issE.l2 + '\n')})`);   // triggers the store's change event (like a TLE refresh)
+  h = await holdSel(2500);
+  check('Doppler: radio choice survives a TLE data refresh/import', h.every(x => x.sel === '1' && near(mhzOf(x.big[0]), 437.8, 12)), h[0]);
+
   // ---- long / truncated / in-progress passes in the UI (AO-10: ~10 h passes at min elevation 0)
   await ev(`SatStore.set({ minEl: 0, days: 5 })`); await go('#/passes/14129'); await sleep(3000);
   const aoRows = await ev(`document.querySelectorAll('.pass').length`);

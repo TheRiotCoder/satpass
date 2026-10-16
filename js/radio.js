@@ -69,5 +69,10 @@
   var DISCLAIMER = "Frequencies are approximate and change. Always verify with the AMSAT status page (amsat.org/status) before operating.";
   function curated(norad) { for (var i = 0; i < CURATED.length; i++) if (CURATED[i].norad === norad) return CURATED[i]; return null; }
   function radios(norad) { return RADIO[norad] || []; }
-  return { CURATED: CURATED, RADIO: RADIO, curated: curated, radios: radios, DISCLAIMER: DISCLAIMER };
+  // Index of the radio/mode to show for a satellite given a stored choice (clamped; invalid/missing -> 0).
+  function pickRadio(norad, stored) {
+    var n = radios(norad).length, i = Math.floor(Number(stored));
+    return n && i >= 0 && i < n ? i : 0;
+  }
+  return { CURATED: CURATED, RADIO: RADIO, curated: curated, radios: radios, pickRadio: pickRadio, DISCLAIMER: DISCLAIMER };
 });

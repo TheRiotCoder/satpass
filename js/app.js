@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw;
-  var DAY = 86400000, APP_VERSION = "1.0.1";
+  var DAY = 86400000, APP_VERSION = "1.0.2";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -64,11 +64,15 @@
   /* ---------- views infrastructure ---------- */
   var view = { token: 0, timers: [], tick: null, resize: null };
   function clearView() { view.token++; view.timers.forEach(clearInterval); view.timers = []; view.tick = null; view.resize = null; }
-  function every(ms, fn) { view.timers.push(setInterval(fn, ms)); }
+  // Timers are bound to the view that created them: a callback that fires after its view was replaced is ignored.
+  function every(ms, fn) { var tok = view.token; view.timers.push(setInterval(function () { if (tok === view.token) fn(); }, ms)); }
   function setTitle(t) { titleEl.textContent = t; document.title = t === "SatPass" ? "SatPass – Satellite & ISS Pass Predictor" : t + " – SatPass"; }
   function contentWidth() { return Math.max(240, (main.clientWidth || 360) - 28); }
 
   var ROUTES = {};
+  // Re-render the current view in place (e.g. after a select changed). Must go through here, never invoke a view function directly:
+  // that would leave the previous render's 1 s / 30 s timers running and they would keep overwriting the new DOM with stale state.
+  function rerender(name, a) { clearView(); ROUTES[name](a); }
   function route() {
     clearView();
     var h = (location.hash || "#/").replace(/^#\/?/, ""), parts = h.split("?")[0].split("/").map(decodeURIComponent), name = parts[0] || (S.hasLocation() ? "passes" : "passes");
@@ -159,10 +163,10 @@
       '<select class="inp" id="elSel" aria-label="Minimum elevation" style="flex:0 1 110px">' + [0, 5, 10, 15, 20, 30, 45].map(function (d) { return '<option value="' + d + '"' + (d === s.minEl ? " selected" : "") + ">min " + d + "°</option>"; }).join("") + "</select>" +
       '<label class="muted" style="display:flex;align-items:center;gap:6px;min-height:40px"><input type="checkbox" id="visChk"' + (visOnly ? " checked" : "") + ' style="width:20px;height:20px"> visible only</label></div>' +
       '<div id="staleBox"></div><div id="passList"><div class="banner">Computing passes…</div></div><div id="passFoot"></div>';
-    $("#daysSel").onchange = function () { S.set({ days: Number(this.value) }); ROUTES.passes(a); };
-    $("#elSel").onchange = function () { S.set({ minEl: Number(this.value) }); passCache = {}; refreshNextBar(); ROUTES.passes(a); };
-    if ($("#scopeSel")) $("#scopeSel").onchange = function () { S.save("scope", this.value); ROUTES.passes(a); };
-    $("#visChk").onchange = function () { S.save("visOnly", this.checked); ROUTES.passes(a); };
+    $("#daysSel").onchange = function () { S.set({ days: Number(this.value) }); rerender("passes", a); };
+    $("#elSel").onchange = function () { S.set({ minEl: Number(this.value) }); passCache = {}; refreshNextBar(); rerender("passes", a); };
+    if ($("#scopeSel")) $("#scopeSel").onchange = function () { S.save("scope", this.value); rerender("passes", a); };
+    $("#visChk").onchange = function () { S.save("visOnly", this.checked); rerender("passes", a); };
     var ids = single ? [single] : scope === "curated" ? R.CURATED.map(function (c) { return c.norad; }) : scope === "visible" ? [25544, 48274] : s.favs.slice();
     ids = ids.filter(function (n) { return entry(n); });
     var stale = staleList(ids);
@@ -412,7 +416,7 @@
     var radioSats = R.CURATED.filter(function (c) { return R.radios(c.norad).length; }).map(function (c) { return c.norad; });
     var n = a[0] ? Number(a[0]) : S.load("dopSat", 25544); if (radioSats.indexOf(n) < 0) n = 25544;
     S.save("dopSat", n);
-    var radios = R.radios(n), ri = Math.min(S.load("dopRadio:" + n, 0), radios.length - 1), frac = S.load("dopFrac", 0.5);
+    var radios = R.radios(n), ri = R.pickRadio(n, S.load("dopRadio:" + n, 0)), frac = S.load("dopFrac", 0.5);
     var radio = radios[ri], e = entry(n), sat = satObj(n), token = view.token;
     main.innerHTML = '<div class="banner warn">⚠️ <b>Approximate.</b> ' + esc(R.DISCLAIMER) + " Frequencies, tones and operating modes change; many satellites are off or in safe mode for long periods.</div>" +
       '<div class="toolbar"><select class="inp" id="dSat" aria-label="Satellite">' + radioSats.map(function (id) { return '<option value="' + id + '"' + (id === n ? " selected" : "") + ">" + esc(longName(id)) + (entry(id) ? "" : " (no TLE)") + "</option>"; }).join("") + "</select>" +
@@ -424,7 +428,7 @@
       '<section class="card"><h2>Doppler across a pass</h2><div id="dPassSel"></div><div class="tblwrap" id="dTbl"></div>' +
       '<p class="note">First-order Doppler: Rx = f<sub>down</sub>·(1 − rr/c); to be heard on f<sub>up</sub> you transmit f<sub>up</sub>·(1 + rr/c). rr = range rate (+ receding). Positions use a TLE, so the shift is accurate to ~tens of Hz when the TLE is fresh. Times in ' + F.tzLabel(Date.now(), utc()) + ".</p></section>";
     $("#dSat").onchange = function () { go("#/doppler/" + this.value); };
-    if ($("#dRadio")) $("#dRadio").onchange = function () { S.save("dopRadio:" + n, Number(this.value)); ROUTES.doppler(a); };
+    if ($("#dRadio")) $("#dRadio").onchange = function () { S.save("dopRadio:" + n, Number(this.value)); rerender("doppler", a); };
     function sats() { // satellite-frame frequencies (Hz)
       if (radio.kind === "linear") { var p = D.linearPair(radio, frac); return { up: p.upHz, down: p.downHz }; }
       return { up: radio.up, down: radio.down };
