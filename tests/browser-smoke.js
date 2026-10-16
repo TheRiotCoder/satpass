@@ -389,7 +389,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
     await go('#/doppler/25544'); await sleep(1500);
     check('offline: Doppler works', await ev(`document.querySelectorAll('.dopp-big b').length`) === 2);
     await go('#/settings'); await sleep(800);
-    check('offline: Setup → Data sources renders and says what to do (import path stays available on Sats tab)', await ev(`!!document.querySelector('#srcCard') && document.querySelectorAll('#srcCard .srcrow').length === 4`) && (await ev(`/import a TLE\/OMM file/i.test(document.querySelector('#srcCard').textContent)`)));
+    check('offline: Setup → Data sources renders and says what to do (import path stays available on Sats tab)', await ev(`!!document.querySelector('#srcCard') && document.querySelectorAll('#srcCard .srcrow').length === 4`) && (await ev(`/import a TLE.OMM file/i.test(document.querySelector('#srcCard').textContent)`)));
     await go('#/sats'); await sleep(600);
     check('offline: Sats tab offers the file import and paste box', await ev(`!!document.querySelector('#fileIn') && !!document.querySelector('#pasteTa')`));
     // SAR + other categories work offline from the precached lazy snapshots (page was reloaded offline, so these come from the service-worker cache)
