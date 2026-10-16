@@ -34,7 +34,9 @@ const SECRETS = ["me@example.com", "hunter2-hunter2-hunter2", "N2YO-SECRET-KEY",
   ok("POST refused (405)", r.status === 405);
   r = await call("/nothing");
   ok("unknown route 404 (not an open proxy)", r.status === 404 && upstream.length === 0);
-  ok("credential-less, origin-less call (curl) still gets no CORS header but works for /health", (await call("/health", { origin: null })).status === 200);
+  ok("1.2.1: an origin-less call (curl/script) WITHOUT the access token is refused (403 'origin'), no upstream traffic", await (async () => { const x = await call("/health", { origin: null }); const y = await call("/spacetrack/gp?ids=25544", { origin: null, headers: { "X-SpaceTrack-Identity": "me%40example.com", "X-SpaceTrack-Password": "hunter2-hunter2-hunter2" } }); return x.status === 403 && x.h.get("X-SatPass-Error") === "origin" && y.status === 403 && upstream.length === 0 && !x.h.get("Access-Control-Allow-Origin"); })());
+  { const E2 = { ALLOWED_ORIGINS: ORIGIN, PROXY_TOKEN: "PROXY-ACCESS-TOKEN" }; const x = await call("/health", { origin: null, env: E2, headers: { "X-SatPass-Proxy-Token": "PROXY-ACCESS-TOKEN" } }), y = await call("/health", { origin: null, env: E2, headers: { "X-SatPass-Proxy-Token": "wrong" } });
+    ok("…an origin-less call WITH the correct proxy token is served; a wrong token is refused", x.status === 200 && y.status === 403); }
 
   // ---------- Space-Track
   reset();
@@ -52,6 +54,11 @@ const SECRETS = ["me@example.com", "hunter2-hunter2-hunter2", "N2YO-SECRET-KEY",
   ok("Space-Track: the same query within the hour is served from cache (no second login) – honours 'GP at most once/hour'", r.status === 200 && r.h.get("X-SatPass-Cache") === "HIT" && upstream.length === n0);
   r = await call("/spacetrack/gp?ids=25544,43017", { headers: { "X-SpaceTrack-Identity": "other%40example.com", "X-SpaceTrack-Password": "x".repeat(16) } });
   ok("Space-Track: cache is per account (another identity does not read it)", r.h.get("X-SatPass-Cache") === "MISS");
+  { // cache is keyed by identity AND password: a wrong password must never be answered from the cache of the correct one
+    const hit = await call("/spacetrack/gp?ids=25544,43017", { headers: stH });
+    const bad = await call("/spacetrack/gp?ids=25544,43017", { headers: { "X-SpaceTrack-Identity": "me%40example.com", "X-SpaceTrack-Password": "WRONG-PASSWORD-123456" } });
+    ok("Space-Track cache key includes the password: same identity + wrong password is a cache MISS (goes to the real login)", hit.h.get("X-SatPass-Cache") === "HIT" && bad.h.get("X-SatPass-Cache") !== "HIT", bad.h.get("X-SatPass-Cache"));
+  }
   reset(); const up0 = upstream.length;
   r = await call("/spacetrack/gp?ids=25544");
   ok("Space-Track: no credentials -> 401 no-credentials, upstream untouched", r.status === 401 && r.h.get("X-SatPass-Error") === "no-credentials" && upstream.length === up0);
@@ -83,6 +90,9 @@ const SECRETS = ["me@example.com", "hunter2-hunter2-hunter2", "N2YO-SECRET-KEY",
   ok("SatNOGS TLE: second call served from the hourly cache, multi-id filter works", r.h.get("X-SatPass-Cache") === "HIT" && upstream.length === 1 && JSON.parse(r.text).length === 2);
   r = await call("/satnogs/tle?ids=25544", { headers: { "X-SatNOGS-Token": "SATNOGS-TOKEN-0123456789abcdef0123456789abcd" } });
   ok("SatNOGS TLE: token goes upstream as 'Authorization: Token …' (separate cache bucket)", upstream[1].init.headers.Authorization === "Token SATNOGS-TOKEN-0123456789abcdef0123456789abcd" && r.h.get("X-SatPass-Cache") === "MISS");
+  r = await call("/satnogs/tle?ids=25544", { headers: { "X-SatNOGS-Token": "SATNOGS-TOKEN-0123456789abcdef0123456789abcd" } });
+  const r2t = await call("/satnogs/tle?ids=25544", { headers: { "X-SatNOGS-Token": "ANOTHER-TOKEN-0000000000000000000000000000" } });
+  ok("SatNOGS cache key includes a hash of the token: same token HIT, a different token MISS (token validity is checked upstream)", r.h.get("X-SatPass-Cache") === "HIT" && r2t.h.get("X-SatPass-Cache") === "MISS");
   reset(); r = await call("/satnogs/transmitters?ids=25544,7530");
   ok("SatNOGS transmitters: one upstream request per satellite with the documented filter, results concatenated", upstream.length === 2 && upstream[0].url === "https://db.satnogs.org/api/transmitters/?format=json&satellite__norad_cat_id=7530" && upstream[1].url.endsWith("satellite__norad_cat_id=25544") && JSON.parse(r.text).length === 82, [upstream.map(u => u.url), r.status, r.text.slice(0, 80)]);
   r = await call("/satnogs/transmitters?ids=" + Array.from({ length: 31 }, (_, i) => i + 1).join(","));

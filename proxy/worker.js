@@ -14,7 +14,7 @@
    — or stored as Worker secrets (ST_IDENTITY, ST_PASSWORD, SATNOGS_TOKEN, N2YO_KEY), the recommended setup. Secrets are only used when PROXY_TOKEN
    is also set and the request carries it (X-SatPass-Proxy-Token), so strangers who find the URL cannot spend your quota.
    Nothing is logged; secrets are never put in response bodies or headers. */
-const VERSION = "1.2.0";
+const VERSION = "1.2.1";
 const UA = "SatPass-proxy/" + VERSION + " (+https://github.com/TheRiotCoder/satpass)";
 const ST = "https://www.space-track.org", SN = "https://db.satnogs.org/api", N2 = "https://api.n2yo.com/rest/v1/satellite";
 const TTL = { stgp: 3600, sntle: 3600, sntx: 21600, n2tle: 3600, n2pass: 1800 };
@@ -65,7 +65,7 @@ async function spacetrack(req, env, ctx, url, who) {
   if (!list) return fail(req, env, 400, "bad-request", "ids must be 1–" + MAX_IDS.spacetrack + " comma-separated NORAD numbers.");
   const identity = who.stIdentity, password = who.stPassword;
   if (!identity || !password) return fail(req, env, 401, "no-credentials", "No Space-Track credentials (send them from the app or set ST_IDENTITY / ST_PASSWORD secrets).");
-  const key = "https://satpass-cache.invalid/st/gp/" + (await sha(identity)) + "/" + list.join(","), hit = await cacheGet(key);
+  const key = "https://satpass-cache.invalid/st/gp/" + (await sha(identity + "\n" + password)) + "/" + list.join(","), hit = await cacheGet(key);
   if (hit) return fromCache(req, env, hit, await hit.text());   // Space-Track: same query at most once per hour
   const query = ST + "/basicspacedata/query/class/gp/NORAD_CAT_ID/" + list.join(",") + "/orderby/NORAD_CAT_ID%20asc/format/json";
   let r;
@@ -86,7 +86,7 @@ function snHeaders(who) { const h = { "User-Agent": UA, Accept: "application/jso
 async function satnogsTle(req, env, url, who) {
   const raw = url.searchParams.get("ids"), list = raw ? ids(raw, MAX_IDS.satnogsTle) : null;
   if (raw && !list) return fail(req, env, 400, "bad-request", "ids must be up to " + MAX_IDS.satnogsTle + " comma-separated NORAD numbers.");
-  const key = "https://satpass-cache.invalid/sn/tle/" + (who.satnogsToken ? "t" : "a"), hit = await cacheGet(key);
+  const key = "https://satpass-cache.invalid/sn/tle/" + (who.satnogsToken ? "t" + (await sha(who.satnogsToken)) : "a"), hit = await cacheGet(key);
   let text, state = "HIT";
   if (hit) text = await hit.text();
   else {
@@ -104,7 +104,7 @@ async function satnogsTx(req, env, url, who) {
   if (!list) return fail(req, env, 400, "bad-request", "ids must be 1–" + MAX_IDS.satnogsTx + " comma-separated NORAD numbers.");
   const out = []; let state = "HIT";
   for (const id of list) {
-    const key = "https://satpass-cache.invalid/sn/tx/" + id + "/" + (who.satnogsToken ? "t" : "a"), hit = await cacheGet(key); let text;
+    const key = "https://satpass-cache.invalid/sn/tx/" + id + "/" + (who.satnogsToken ? "t" + (await sha(who.satnogsToken)) : "a"), hit = await cacheGet(key); let text;
     if (hit) text = await hit.text();
     else {
       let r; try { r = await upstream(SN + "/transmitters/?format=json&satellite__norad_cat_id=" + id, { headers: snHeaders(who) }); } catch (e) { return fail(req, env, 502, "upstream", "SatNOGS DB is unreachable from the proxy."); }
@@ -157,6 +157,8 @@ export default {
     if (origin && !allowed.includes(origin)) return fail(req, env, 403, "origin", "This origin is not in ALLOWED_ORIGINS.");
     // proxy access token (required whenever the worker holds secrets; recommended always)
     const sentToken = dec(req.headers.get("X-SatPass-Proxy-Token")), tokenOk = !!env.PROXY_TOKEN && sentToken && eq(sentToken, env.PROXY_TOKEN);
+    // Browsers always send Origin on cross-origin requests. A request without one (curl, scripts, server-side) is only served when it proves itself with the access token.
+    if (!origin && !tokenOk) return fail(req, env, 403, "origin", "Requests without an Origin header need the proxy access token (X-SatPass-Proxy-Token).");
     if (env.PROXY_TOKEN && !tokenOk) return fail(req, env, 401, "proxy-token", "Missing or wrong proxy access token.");
     const hasSecrets = !!(env.ST_IDENTITY || env.ST_PASSWORD || env.SATNOGS_TOKEN || env.N2YO_KEY);
     if (hasSecrets && !env.PROXY_TOKEN) return fail(req, env, 500, "config", "This worker holds credentials as secrets but PROXY_TOKEN is not set; refusing to serve (set PROXY_TOKEN).");

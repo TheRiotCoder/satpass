@@ -15,7 +15,7 @@ and adds CORS headers **for your SatPass origin only**.
 
 | Route | Upstream | Cached |
 | --- | --- | --- |
-| `GET /health` | – | no |
+| `GET /health` | – | no (but see the Origin rule below) |
 | `GET /spacetrack/gp?ids=25544,43017` | login + `basicspacedata/query/class/gp/NORAD_CAT_ID/…/format/json` | 1 h |
 | `GET /satnogs/tle?ids=…` | `db.satnogs.org/api/tle/` (bulk, filtered here) | 1 h |
 | `GET /satnogs/transmitters?ids=…` | `db.satnogs.org/api/transmitters/?satellite__norad_cat_id=…` (≤30 ids) | 6 h |
@@ -56,3 +56,8 @@ sent to *your* Worker in request headers over HTTPS, forwarded to the matching s
 ## Local test
 
 `npx wrangler dev` serves on `http://localhost:8787`; SatPass accepts `http://localhost:*` proxies (set `ALLOWED_ORIGINS` to `http://localhost:8000` or wherever you serve SatPass).
+
+
+## Origin rule (1.2.1)
+
+Browsers always send an `Origin` header on cross-origin requests, so SatPass is unaffected. A request **without** `Origin` (curl, scripts, server-side callers) is refused with 403 unless it carries the correct `X-SatPass-Proxy-Token`: `curl -H 'X-SatPass-Proxy-Token: …' https://<worker>/health`. Cache keys for Space-Track (identity + password) and SatNOGS (token) include a hash of the secret, so a wrong password or token is never answered from another user's cached data.
