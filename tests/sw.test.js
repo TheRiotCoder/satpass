@@ -30,5 +30,32 @@ const normal = fire(B + "css/style.css");
 ok("SW still serves ordinary same-origin assets (cache-first)", normal.responded === true);
 const nav = fire(B, {}, "GET", "navigate");
 ok("SW still handles navigations (offline shell)", nav.responded === true);
-ok("VERSION constant is satpass-v1.2.0", /const VERSION = "satpass-v1\.2\.0"/.test(src));
-done();
+ok("VERSION constant is satpass-v1.2.1", /const VERSION = "satpass-v1\.2\.1"/.test(src));
+
+// ---------- 1.2.1: cache-consistent per version (no overwrite from the network after install), update wiring
+(async () => {
+  const store = {}, netCalls = [], L = {};
+  const mkRes = (body) => ({ ok: true, body, clone() { return mkRes(body); } });
+  const cx = {
+    self: { location: { origin: "https://theriotcoder.github.io" }, addEventListener: (t, f) => { L[t] = f; }, registration: { active: null }, clients: { claim() {} }, skipWaiting() {} },
+    caches: { open: async (v) => ({ put: async (k, r) => { store[(k.url || k)] = r; }, addAll: async () => {} }), match: async (k) => store[(k.url || k)] || store["https://theriotcoder.github.io/satpass/" + k] || undefined, keys: async () => [], delete: async () => true },
+    fetch: async (r) => { netCalls.push(r.url || r); return mkRes("NETWORK:" + (r.url || r)); }, Request: function (u) { this.url = u; }, Response: { error: () => ({ error: true }) }, URL, setTimeout, clearTimeout, Promise
+  };
+  vm.createContext(cx); vm.runInContext(src, cx);
+  const B = "https://theriotcoder.github.io/satpass/";
+  const go = (url, mode) => new Promise((resolve) => { let p = null; const req = { url, method: "GET", mode: mode || "cors", headers: new Headers() }; L.fetch({ request: req, respondWith: (x) => { p = Promise.resolve(x); }, waitUntil: () => {} }); resolve(p); }).then((p) => p);
+  store[B + "js/app.js"] = mkRes("CACHED-APP-JS"); store["index.html"] = mkRes("CACHED-INDEX");
+  const a = await go(B + "js/app.js"), b = await go(B + "js/app.js"), n = await go(B, "navigate");
+  ok("static asset is served from the cache and never refreshed from the network on load", a.body === "CACHED-APP-JS" && b.body === "CACHED-APP-JS" && !netCalls.some((u) => /app\.js/.test(u)), netCalls);
+  ok("navigation serves the cached shell without any network request or cache overwrite (no mixed old/new files)", n.body === "CACHED-INDEX" && netCalls.length === 0 && store["index.html"].body === "CACHED-INDEX");
+  const miss = await go(B + "js/unlisted.js");
+  ok("a file that is not in the cache is fetched once from the network and then added", miss.body.startsWith("NETWORK:") && netCalls.length === 1);
+  ok("sw.js has no background re-fetch of cached files any more", !/refresh in the background|settle\(/.test(src) && /Cache-consistent per VERSION/.test(src));
+  const app = fs.readFileSync(path.join(__dirname, "..", "js", "app.js"), "utf8");
+  ok("app: update bar is offered for an already-waiting worker (reg.waiting) and for a newly installed one", /reg\.waiting && navigator\.serviceWorker\.controller\) offerUpdate\(reg\.waiting\)/.test(app) && /nw\.state === "installed" && navigator\.serviceWorker\.controller\) offerUpdate\(nw\)/.test(app));
+  ok("app: reg.update() runs when the app becomes visible again and about hourly", /visibilitychange[^}]*check\(\)/.test(app) && /setInterval\(check, 3600e3\)/.test(app) && /reg\.update\(\)/.test(app));
+  ok("app: the update button posts skipWaiting to the waiting worker and sw.js honours it", /w\.postMessage\("skipWaiting"\)/.test(app) && /event\.data === "skipWaiting"\) self\.skipWaiting\(\)/.test(src));
+  ok("app: malformed hash escapes cannot abort boot (safeDecode)", /function safeDecode/.test(app) && !/\.map\(decodeURIComponent\)/.test(app));
+  done();
+})();
+

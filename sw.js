@@ -1,6 +1,6 @@
 /* SatPass service worker (adapted from rf-toolbox) – offline app shell.
    VERSION is the single version string for the app (the About page reads it from the cache name). Bump it on every release. */
-const VERSION = "satpass-v1.2.0";
+const VERSION = "satpass-v1.2.1";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/style.css",
   "js/vendor/satellite.min.js", "js/grid.js", "js/doppler.js", "js/format.js", "js/tle.js", "js/passes.js", "js/ics.js", "js/radio.js", "js/catalog.js", "js/sources.js",
@@ -9,7 +9,6 @@ const SHELL = [
   "data/snap/sar.js", "data/snap/eo.js", "data/snap/nav.js", "data/snap/science.js",
   "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png", "icons/apple-touch-icon.png", "icons/favicon-32.png"
 ];
-const NAV_TIMEOUT_MS = 3500; // on slow "lie-fi" connections fall back to the cached shell after this long
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })))));
@@ -41,38 +40,20 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET" || bypass(req, new URL(req.url))) return;
 
-  if (req.mode === "navigate") { // network first with timeout, cached shell offline
-    let settle;
-    const refresh = new Promise((r) => { settle = r; });
-    const network = fetch(req).then((res) => {
-      if (res && res.ok && isActiveWorker()) {
-        const copy = res.clone();
-        caches.open(VERSION).then((c) => c.put("index.html", copy)).then(settle, settle);
-      } else settle();
-      return res;
-    }, (err) => { settle(); throw err; });
-    event.waitUntil(refresh);
-    event.respondWith(new Promise((resolve) => {
-      let done = false;
-      const finish = (r) => { if (!done && r) { done = true; resolve(r); } };
-      const timer = setTimeout(() => cachedShell().then(finish), NAV_TIMEOUT_MS);
-      network.then((res) => { clearTimeout(timer); finish(res); },
-        () => { clearTimeout(timer); cachedShell().then((r) => { if (r) finish(r); else { done = true; resolve(Response.error()); } }); });
-    }));
-    return;
-  }
-
-  // static assets: cache first, refresh in the background (kept alive with waitUntil)
-  const cachedP = caches.match(req, { ignoreSearch: true });
-  const net = fetch(req).then((res) => {
-    if (res && res.ok && isActiveWorker()) {
-      const copy = res.clone();
-      return caches.open(VERSION).then((c) => c.put(req, copy)).then(() => res);
-    }
-    return res;
-  });
-  event.waitUntil(net.then(() => {}, () => {}));
-  event.respondWith(cachedP.then((cached) => cached || net.catch(() => cached || Response.error())));
+  // Cache-consistent per VERSION: every app file comes from the cache that this worker's install step filled (all with cache:"reload"), so the page
+  // can never mix files of two releases. New releases arrive only through a new VERSION (the worker is re-checked on every start, when the app returns
+  // to the foreground and hourly; the user then taps "Update"). Nothing is ever overwritten from the network after install; a file that is missing from the
+  // cache (not listed in SHELL) is fetched once and added.
+  const wantsShell = req.mode === "navigate";
+  event.respondWith(
+    (wantsShell ? cachedShell() : caches.match(req, { ignoreSearch: true })).then((cached) => {
+      if (cached) return cached;
+      return fetch(req).then((res) => {
+        if (res && res.ok && !wantsShell && isActiveWorker()) { const copy = res.clone(); event.waitUntil(caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {})); }
+        return res;
+      }, () => Response.error());
+    })
+  );
 });
 
 // Tapping a reminder notification focuses (or opens) the app.
