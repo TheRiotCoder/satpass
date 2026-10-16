@@ -288,6 +288,65 @@
       .then(function (pt) { return JSON.parse(new TextDecoder().decode(pt)); }, function () { throw SourceError("auth", "Wrong passphrase."); });
   }
 
+  /* ---------- 1.3.0: biometric key wrapping (WebAuthn PRF), encrypted backup file, auto-lock rule ---------- */
+  // The vault stays "passphrase -> PBKDF2 -> AES-GCM" (unchanged, still decrypts 1.2.x blobs). Biometric unlock adds a SECOND, independent door:
+  // the passphrase is wrapped (AES-GCM) with a key derived (HKDF-SHA256) from a 32-byte WebAuthn PRF output that only the platform authenticator
+  // can produce after user verification. The record is useless without the authenticator; the passphrase always remains the recovery path.
+  var BIO_INFO = "satpass-vault-bio-v1";
+  function prfBytes(p) { var u = p instanceof Uint8Array ? p : new Uint8Array(p || 0); if (u.length < 32) throw SourceError("config", "The authenticator returned no usable PRF secret."); return u.slice(0, 32); }
+  function bioKey(c, prf, salt) {
+    return c.subtle.importKey("raw", prfBytes(prf), "HKDF", false, ["deriveKey"]).then(function (k) {
+      return c.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: salt, info: new TextEncoder().encode(BIO_INFO) }, k, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    });
+  }
+  function bioAad(rec) { return new TextEncoder().encode(BIO_INFO + "|" + rec.rpId + "|" + rec.credId + "|" + rec.prfSalt); }
+  function validBioRecord(r) {
+    var ok = function (v, max) { return typeof v === "string" && v.length > 0 && v.length <= max; };
+    return !!(r && typeof r === "object" && r.v === 1 && ok(r.credId, 1400) && ok(r.prfSalt, 100) && ok(r.rpId, 253) && ok(r.hk, 100) && ok(r.iv, 40) && ok(r.ct, 2000));
+  }
+  // meta: {credId (base64url), prfSalt (base64), rpId}; prf: the 32-byte PRF output for prfSalt. Returns the record to store.
+  function wrapSecret(secret, prf, meta, c) {
+    c = getSubtle(c); var hk = c.getRandomValues(new Uint8Array(16)), iv = c.getRandomValues(new Uint8Array(12));
+    var rec = { v: 1, credId: meta.credId, prfSalt: meta.prfSalt, rpId: meta.rpId, created: Date.now(), hk: b64(hk), iv: b64(iv) };
+    return bioKey(c, prf, hk).then(function (key) { return c.subtle.encrypt({ name: "AES-GCM", iv: iv, additionalData: bioAad(rec) }, key, new TextEncoder().encode(String(secret))); })
+      .then(function (ct) { rec.ct = b64(ct); return rec; });
+  }
+  function unwrapSecret(rec, prf, c) {
+    c = getSubtle(c); if (!validBioRecord(rec)) return Promise.reject(SourceError("config", "The stored biometric record is damaged – remove it and set it up again."));
+    return bioKey(c, prf, unb64(rec.hk)).then(function (key) { return c.subtle.decrypt({ name: "AES-GCM", iv: unb64(rec.iv), additionalData: bioAad(rec) }, key, unb64(rec.ct)); })
+      .then(function (pt) { return new TextDecoder().decode(pt); }, function () { throw SourceError("auth", "The biometric key did not match this vault – use your passphrase and set biometric unlock up again."); });
+  }
+
+  var BACKUP_APP = "satpass-credentials-backup";
+  function exportBackup(creds, proxy, pass, c) {
+    if (!pass || String(pass).length < MIN_PASSPHRASE) return Promise.reject(SourceError("config", "Use a backup passphrase of at least " + MIN_PASSPHRASE + " characters."));
+    if (!creds || !Object.keys(creds).length) return Promise.reject(SourceError("config", "There are no credentials to back up."));
+    return encryptCreds({ creds: creds, proxy: proxy || "" }, pass, c).then(function (blob) {
+      return JSON.stringify({ app: BACKUP_APP, v: 1, created: new Date().toISOString(), note: "SatPass encrypted credentials backup (PBKDF2-SHA256 " + PBKDF2_ITER + " iterations, AES-GCM). Useless without its passphrase. Import it in SatPass → Setup → Data sources.", blob: blob }, null, 1);
+    });
+  }
+  function importBackup(text, pass, c) {
+    var o; try { o = JSON.parse(String(text).slice(0, 200000)); } catch (e) { return Promise.reject(SourceError("parse", "That file is not a SatPass credentials backup.")); }
+    if (!o || o.app !== BACKUP_APP || o.v !== 1 || !o.blob || o.blob.enc !== 1 || typeof o.blob.ct !== "string" || typeof o.blob.salt !== "string" || typeof o.blob.iv !== "string") return Promise.reject(SourceError("parse", "That file is not a SatPass credentials backup."));
+    return decryptCreds(o.blob, pass, c).then(function (p) {
+      if (!p || typeof p !== "object" || !p.creds || typeof p.creds !== "object") throw SourceError("parse", "The backup is empty or damaged.");
+      return { creds: p.creds, proxy: typeof p.proxy === "string" ? p.proxy : "" };
+    }, function (e) { throw e.kind === "auth" ? SourceError("auth", "Wrong backup passphrase.") : e; });
+  }
+
+  // auto-lock rule (pure): cfg {idleMin, hiddenMin} (0 = off); st {now, lastActive, hiddenSince|null} -> "hidden" | "idle" | null
+  var VAULT_DEFAULT = { idleMin: 15, hiddenMin: 5 };
+  function normalizeVaultCfg(c) {
+    function m(v, d) { var n = Math.floor(Number(v)); return isFinite(n) && v !== "" && v != null ? Math.min(720, Math.max(0, n)) : d; }
+    c = c || {}; return { idleMin: m(c.idleMin, VAULT_DEFAULT.idleMin), hiddenMin: m(c.hiddenMin, VAULT_DEFAULT.hiddenMin) };
+  }
+  function lockDue(cfg, st) {
+    cfg = normalizeVaultCfg(cfg);
+    if (st.hiddenSince != null && cfg.hiddenMin > 0 && st.now - st.hiddenSince >= cfg.hiddenMin * 60e3) return "hidden";
+    if (cfg.idleMin > 0 && st.now - st.lastActive >= cfg.idleMin * 60e3) return "idle";
+    return null;
+  }
+
   /* ---------- user-facing messages ---------- */
   function kindWord(kind) { return kind === "network" ? "unreachable" : kind === "rate" ? "rate-limited" : kind === "auth" ? "rejected the credentials" : kind === "config" ? "not set up" : kind === "locked" ? "locked" : kind === "parse" ? "sent unusable data" : "returned an error"; }
   function fallbackMessage(failed, used) {   // failed: [{id, kind}], used: id | null
@@ -303,6 +362,6 @@
     parseSpaceTrackGp: parseSpaceTrackGp, parseSatnogsTle: parseSatnogsTle, parseN2yoTle: parseN2yoTle, parseN2yoPasses: parseN2yoPasses, matchPasses: matchPasses,
     parseSatnogsTransmitters: parseSatnogsTransmitters, txToRadio: txToRadio, toneFromText: toneFromText, compareNominal: compareNominal,
     limitCheck: limitCheck, limitRecord: limitRecord, limitUsed: limitUsed, backoffMs: backoffMs, avoidBusyMinute: avoidBusyMinute, nextOkMinuteMs: nextOkMinuteMs,
-    encryptCreds: encryptCreds, decryptCreds: decryptCreds, fallbackMessage: fallbackMessage, kindWord: kindWord
+    encryptCreds: encryptCreds, decryptCreds: decryptCreds, wrapSecret: wrapSecret, unwrapSecret: unwrapSecret, validBioRecord: validBioRecord, exportBackup: exportBackup, importBackup: importBackup, BACKUP_APP: BACKUP_APP, normalizeVaultCfg: normalizeVaultCfg, lockDue: lockDue, VAULT_DEFAULT: VAULT_DEFAULT, fallbackMessage: fallbackMessage, kindWord: kindWord
   };
 });

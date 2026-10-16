@@ -158,5 +158,34 @@ const creds = { stIdentity: "me@example.com", stPassword: "p@ss w/ord&=?#", satn
     const t0 = Date.now();
     ok("tampered iter (1 / 4e9 / negative) -> auth error in bounded time", (await Promise.all([1, 4e9, -9].map(it => Src.decryptCreds(Object.assign({}, old, { iter: it }), "old passphrase", wc).then(() => "ok", e => e.kind)))).every(x => x === "auth") && Date.now() - t0 < 15000, Date.now() - t0);
   }
+
+  // ---------- 1.3.0: biometric wrapping (stub PRF), encrypted backup, auto-lock rule
+  {
+    const wc = require("crypto").webcrypto, prf = () => wc.getRandomValues(new Uint8Array(32)), meta = { credId: "Y3JlZC1pZA", prfSalt: "c2FsdA==", rpId: "theriotcoder.github.io" };
+    const P1 = prf(), rec = await Src.wrapSecret("my vault passphrase", P1, meta, wc);
+    ok("wrapSecret: record has no plaintext and carries the passkey id/salt/rpId", Src.validBioRecord(rec) && JSON.stringify(rec).indexOf("my vault passphrase") < 0 && rec.credId === meta.credId && rec.rpId === meta.rpId && rec.v === 1);
+    ok("unwrapSecret with the same PRF output returns the passphrase", (await Src.unwrapSecret(rec, P1, wc)) === "my vault passphrase");
+    const bad = async (r, p) => { try { await Src.unwrapSecret(r, p, wc); return "no error"; } catch (e) { return e.kind; } };
+    ok("a different PRF output (another authenticator / another salt) is rejected as 'auth'", (await bad(rec, prf())) === "auth");
+    ok("the record is bound to rpId, credId and salt (AAD): editing any of them breaks decryption", (await bad(Object.assign({}, rec, { rpId: "evil.example" }), P1)) === "auth" && (await bad(Object.assign({}, rec, { credId: "AAAA" }), P1)) === "auth" && (await bad(Object.assign({}, rec, { prfSalt: "AAAA" }), P1)) === "auth");
+    ok("tampered ciphertext / short PRF / junk record are refused", (await bad(Object.assign({}, rec, { ct: rec.ct.slice(0, -4) + "AAAA" }), P1)) === "auth" && (await bad(rec, new Uint8Array(8))) === "config" && (await bad({ v: 1 }, P1)) === "config" && !Src.validBioRecord(null) && !Src.validBioRecord(Object.assign({}, rec, { v: 2 })));
+    ok("wrapping twice gives different ciphertexts (random IV/HKDF salt)", (await Src.wrapSecret("x".repeat(12), P1, meta, wc)).ct !== (await Src.wrapSecret("x".repeat(12), P1, meta, wc)).ct);
+
+    const text = await Src.exportBackup({ stIdentity: "me@example.com", stPassword: "S3cret-pw!" }, "https://p.workers.dev", "backup passphrase 1", wc);
+    ok("backup file: JSON, labelled, encrypted (no plaintext identity/password/proxy)", JSON.parse(text).app === Src.BACKUP_APP && JSON.parse(text).blob.enc === 1 && !/me@example|S3cret|workers\.dev/.test(text) && /Useless without/.test(text));
+    const back = await Src.importBackup(text, "backup passphrase 1", wc);
+    ok("backup round-trips credentials and proxy URL", back.creds.stPassword === "S3cret-pw!" && back.creds.stIdentity === "me@example.com" && back.proxy === "https://p.workers.dev");
+    const e1 = await Src.importBackup(text, "wrong passphrase!!", wc).catch(e => e);
+    ok("wrong backup passphrase -> 'Wrong backup passphrase.' (auth)", e1.kind === "auth" && /Wrong backup passphrase/.test(e1.message));
+    const e2 = await Src.importBackup("not json", "x", wc).catch(e => e), e3 = await Src.importBackup(JSON.stringify({ app: "other", v: 1 }), "x", wc).catch(e => e), e4 = await Src.importBackup(JSON.stringify({ app: Src.BACKUP_APP, v: 1, blob: { enc: 1, salt: "AA", iv: "AA", ct: "AA", iter: 1e12 } }), "x", wc).catch(e => e);
+    ok("junk / foreign / tampered-iteration backup files are refused cleanly (bounded time)", e2.kind === "parse" && e3.kind === "parse" && e4.kind === "auth");
+    ok("export refuses a short passphrase and an empty credential set", (await Src.exportBackup({ stPassword: "x" }, "", "short", wc).catch(e => e)).kind === "config" && (await Src.exportBackup({}, "", "long enough pass", wc).catch(e => e)).kind === "config");
+
+    ok("normalizeVaultCfg: defaults 15 / 5, clamps 0..720, junk -> defaults", JSON.stringify(Src.normalizeVaultCfg(null)) === '{"idleMin":15,"hiddenMin":5}' && Src.normalizeVaultCfg({ idleMin: 5000, hiddenMin: -3 }).idleMin === 720 && Src.normalizeVaultCfg({ idleMin: 5000, hiddenMin: -3 }).hiddenMin === 0 && Src.normalizeVaultCfg({ idleMin: "x" }).idleMin === 15 && Src.normalizeVaultCfg({ idleMin: "0" }).idleMin === 0);
+    const L = (cfg, now, la, hs) => Src.lockDue(cfg, { now, lastActive: la, hiddenSince: hs });
+    ok("lockDue: idle threshold", L({ idleMin: 5, hiddenMin: 0 }, 5 * 60e3, 0, null) === "idle" && L({ idleMin: 5, hiddenMin: 0 }, 5 * 60e3 - 1, 0, null) === null);
+    ok("lockDue: hidden threshold wins and applies only while hidden", L({ idleMin: 0, hiddenMin: 2 }, 120e3, 119e3, 0) === "hidden" && L({ idleMin: 0, hiddenMin: 2 }, 119e3, 119e3, 0) === null && L({ idleMin: 0, hiddenMin: 2 }, 9e9, 0, null) === null);
+    ok("lockDue: 0 = off for both", L({ idleMin: 0, hiddenMin: 0 }, 9e12, 0, 0) === null);
+  }
   done();
 })();
