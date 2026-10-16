@@ -85,6 +85,8 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
 
   // ---- passes from bundled TLEs
   await go('#/passes'); await sleep(2500);
+  // a first-run automatic CelesTrak refresh (bundled snapshot older than 6 h) re-renders the list once: wait for it instead of sampling mid-render
+  for (let i = 0; i < 20 && !(await ev(`document.querySelectorAll('.pass').length >= 5`)); i++) await sleep(500);
   const passes = await ev(`[...document.querySelectorAll('.pass')].map(b => ({ n: +b.dataset.n, aos: +b.dataset.aos, text: b.textContent, el: parseFloat(b.querySelector('.el').textContent) }))`);
   check('passes list populated from bundled TLEs (favorites, 3 days)', passes.length >= 5, passes.length);
   check('passes sorted by AOS', passes.every((p, i) => i === 0 || p.aos >= passes[i - 1].aos));
@@ -352,14 +354,21 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
     if (cors.error) console.log('SKIP live-fetch checks (network unreachable from this environment)');
     else {
       check('CelesTrak CORS fetch from page context works', cors.ok && /ISS/.test(cors.head), cors);
+      // if the bundled snapshot is older than 6 h the app refreshes itself at start-up: let that finish (it re-renders the view) before testing the button
+      for (let i = 0; i < 40 && (await ev(`SatStore.data.origin`)) !== 'CelesTrak'; i++) await sleep(500);
       await go('#/sats'); await ev(`SatStore.constants && localStorage.removeItem('satpass:tlemeta')`); await go('#/sats');
       const before = await ev('SatStore.data.fetchedAt');
+      if (await ev(`document.querySelector('#refBtn').disabled`) && await ev(`SatStore.data.origin === 'CelesTrak'`)) {
+        // the bundled snapshot was older than 6 h, so the automatic refresh at start-up already pulled live CelesTrak data (and the manual button is correctly rate-limited)
+        check('Refresh: automatic start-up refresh already updated from live CelesTrak (manual button disabled by the 2 h courtesy rule)', await ev(`JSON.parse(localStorage.getItem('satpass:tle')).origin === 'CelesTrak' && SatStore.data.sats.length > 100`));
+      } else {
       await ev(`document.querySelector('#refBtn').click()`);
       let done = false; for (let i = 0; i < 60 && !done; i++) { await sleep(1000); done = await ev(`!!document.querySelector('#refResult')`); }
       const msg = done ? await ev(`document.querySelector('#refResult').textContent`) : 'timeout; button=' + await ev(`document.querySelector('#refBtn') && document.querySelector('#refBtn').textContent`) + ' lastError=' + await ev('SatStore.lastError()') + ' hash=' + await ev('location.hash');
       check('Refresh button: live CelesTrak refresh succeeds', done && /Updated \d+ element sets/.test(msg), msg);
       check('refreshed data cached with new fetch timestamp + origin CelesTrak', await ev(`SatStore.data.fetchedAt > ${before} && SatStore.data.origin === 'CelesTrak' && JSON.parse(localStorage.getItem('satpass:tle')).origin === 'CelesTrak'`));
       check('refresh button now disabled (rate-limit courtesy)', await ev(`document.querySelector('#refBtn').disabled`));
+      }
       await go('#/passes'); await sleep(2500);
       check('passes recomputed after refresh', await ev(`document.querySelectorAll('.pass').length`) >= 3);
     }
