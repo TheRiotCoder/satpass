@@ -216,6 +216,26 @@ const setup = (S, enable) => { S.sources.setConfig({ proxy: PROXY, enabled: enab
     const pr = await P.S.refresh();
     ok("a Space-Track pull that delivers nothing newer does not reset the data age (delivered ISS epoch 1 Oct < bundled)", pr.ok && pr.source === "spacetrack" && P.S.data.fetchedAt === g0 && pr.updated === 0, [g0, P.S.data.fetchedAt, pr.updated]);
   }
+  // ---------- 1.2.2: session credentials lost after the tab closed; hourly rule independent of timestamps
+  {
+    const A = load({ fetch: (u) => health(u) || resp(404, "") }); await setup(A.S, { spacetrack: true });
+    const B = load({ ls: A.ls });   // new tab: localStorage kept, sessionStorage gone
+    ok("after a tab close the mode is 'session-lost' (UI: 'were session-only and need to be re-entered'); no secret in localStorage", B.S.sources.credMode() === "session-lost" && Object.keys(B.S.sources.getCreds()).length === 0 && SECRETVALS.every(v => Object.values(A.ls).every(x => x.indexOf(v) < 0)));
+    await B.S.sources.setCreds(CRED); B.S.sources.forgetCreds();
+    ok("Forget credentials clears the hint ('none'); never-set stays 'none'", load({ ls: B.ls }).S.sources.credMode() === "none" && load({}).S.sources.credMode() === "none");
+    await B.S.sources.setCreds({ n2yoKey: "x-key-12345" }); await B.S.sources.lock("a-long-passphrase");
+    ok("encrypting removes the hint (mode 'encrypted' -> locked after reload, not 'session-lost')", load({ ls: B.ls }).S.sources.credMode() === "locked");
+  }
+  {
+    // the hourly pull rule must hold even when the pull found nothing newer (data age untouched) – 30 runs to catch any timestamp race
+    let bad = 0;
+    for (let i = 0; i < 30; i++) {
+      const P = load({ fetch: (u) => isCT(u) ? new TypeError("Failed to fetch") : (health(u) || stOk(u) || resp(404, "")) }); await setup(P.S, { spacetrack: true });
+      const r1 = await P.S.refresh(), r2 = await P.S.refresh();
+      if (!(r1.ok && !r2.ok && /less than 1 h ago|pulled less than/.test(r2.message))) bad++;
+    }
+    ok("second manual refresh within the hour is refused by the local 1 h rule, 30/30 runs (no 1 ms timestamp race)", bad === 0, bad);
+  }
   // ---------- 1.2.1 credential hardening
   {
     // reload within the same tab keeps session creds; a new tab/browser start (fresh sessionStorage) does not

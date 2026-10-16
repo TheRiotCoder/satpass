@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.2 – peer-review recheck
+- Fixed a 1 ms race between a category's `fetchedAt` and the source's `lastOk` (flaky "second manual refresh within the hour" test): one shared timestamp, and the hourly pull rule now remembers which categories the last pull covered instead of comparing timestamps (it also keeps working after a pull that found nothing newer).
+- After a tab close, session-only credentials are reported as "Credentials were session-only and need to be re-entered" instead of "No credentials stored".
+- Wording: "not saved to local storage" instead of "never on disk" (browser session-restore may persist sessionStorage); UI, README, CHANGELOG.
+
 ## 1.2.1 – peer-review round 1
 
 Every radio-data claim was checked against a primary source before it was changed (SatNOGS DB API, AMSAT Live Linear/FM lists and AO-7/SO-50 pages, NOAA OSPO / NESDIS, WMO OSCAR, CelesTrak GP availability). The SatNOGS dumps used are committed as `tests/fixtures/satnogs-tx-<norad>.json` and the radio table is tested against them.
@@ -14,7 +19,7 @@ Every radio-data claim was checked against a primary source before it was change
 - **SatNOGS live entries**: listed drift is applied (ppb, cross-checked against SO-50 and AO-7 on-air offsets), CTCSS tone is read from the description, uplink-only entries are no longer shown as a downlink.
 
 ### Security / PWA
-- Credentials are never written to localStorage in plaintext; passphrase (≥ 10 chars, PBKDF2 600 000) required to persist; session/memory otherwise; legacy plaintext migrates (encrypt or remove). Warning next to the Space-Track password pointing at the proxy token mode.
+- Credentials are not saved to localStorage in plaintext; passphrase (≥ 10 chars, PBKDF2 600 000) required to persist; session/memory otherwise; legacy plaintext migrates (encrypt or remove). Warning next to the Space-Track password pointing at the proxy token mode.
 - "Test connection" (and any `setCreds`) can no longer overwrite or delete a locked encrypted blob; fields/Test disabled while locked. Stored PBKDF2 iterations clamped to 100 000–2 000 000.
 - Space-Track / SatNOGS proxy cache keys include the password / token hash; the proxy rejects a missing `Origin` unless the access token is supplied.
 - CSP: `style-src 'self'` (+ `style-src-attr 'unsafe-inline'`), no localhost in the deployed `connect-src`; README documents the `*.workers.dev` limit and how to edit it.

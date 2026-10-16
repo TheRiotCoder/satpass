@@ -192,7 +192,8 @@
   if (credBlob && credBlob.enc) credLocked = true;
   else if (credBlob && Object.keys(cleanCreds(credBlob)).length) { credVals = cleanCreds(credBlob); legacyPlain = true; }
   else credVals = cleanCreds(sessLoad());
-  function credMode() { return credLocked ? "locked" : memPass || (credBlob && credBlob.enc) ? "encrypted" : legacyPlain ? "legacy-plain" : Object.keys(credVals).length ? "session" : "none"; }
+  var sessionHint = !!load("credhint", false);   // non-secret marker: credentials were entered as session-only (so an empty store after the tab closed can say so)
+  function credMode() { return credLocked ? "locked" : memPass || (credBlob && credBlob.enc) ? "encrypted" : legacyPlain ? "legacy-plain" : Object.keys(credVals).length ? "session" : sessionHint ? "session-lost" : "none"; }
   function secretList() { return CRED_KEYS.map(function (k) { return credVals[k]; }).concat([memPass]); }
   function red(t) { return Src.redact(t, secretList()); }
   function saveCfg() { save("sources", srcCfg); }
@@ -201,9 +202,10 @@
     if (credLocked) return Promise.reject(lockedErr());   // never overwrite (or delete) the encrypted blob while it cannot be decrypted
     if (memPass) return Src.encryptCreds(credVals, memPass).then(function (blob) {
       if (!save("creds", blob)) throw Src.SourceError("storage", "Browser storage is full or blocked – the encrypted credentials could not be saved.");
-      credBlob = blob; legacyPlain = false; sessSave(null);
+      credBlob = blob; legacyPlain = false; sessSave(null); sessionHint = false; del("credhint");
     });
     del("creds"); credBlob = null; legacyPlain = false;   // no passphrase: nothing readable is kept in localStorage
+    if (Object.keys(credVals).length) { sessionHint = true; save("credhint", true); } else if (sessionHint) { sessionHint = false; del("credhint"); }
     sessSave(credVals);   // (without sessionStorage the credentials simply stay in memory)
     return Promise.resolve();
   }
@@ -214,7 +216,7 @@
     CRED_KEYS.forEach(function (k) { if (patch && k in patch) { var v = String(patch[k] == null ? "" : patch[k]).trim(); if (v) credVals[k] = v; else delete credVals[k]; } });
     clearBlocks(); return persistCreds();
   }
-  function forgetCreds() { credVals = {}; credBlob = null; credLocked = false; memPass = null; legacyPlain = false; del("creds"); sessSave(null); clearBlocks(); emit(); }
+  function forgetCreds() { credVals = {}; credBlob = null; credLocked = false; memPass = null; legacyPlain = false; sessionHint = false; del("creds"); del("credhint"); sessSave(null); clearBlocks(); emit(); }
   function lockWithPassphrase(pass) {
     if (credLocked) return Promise.reject(lockedErr());
     if (!pass || pass.length < Src.MIN_PASSPHRASE) return Promise.reject(Src.SourceError("config", "Use a passphrase of at least " + Src.MIN_PASSPHRASE + " characters."));
@@ -233,7 +235,7 @@
     return srcCfg;
   }
   function stOf(id) { return srcStat[id] || (srcStat[id] = { lastOk: 0, lastAttempt: 0, lastError: null, lastKind: null, fails: 0, backoffUntil: 0, blocked: null, lastNote: null }); }
-  function noteOk(id, note) { var st = stOf(id), now = Date.now(); st.lastOk = now; st.lastAttempt = now; st.lastError = null; st.lastKind = null; st.fails = 0; st.backoffUntil = 0; st.blocked = null; st.lastNote = note || null; save("srcstatus", srcStat); }
+  function noteOk(id, note, at) { var st = stOf(id), now = at || Date.now(); st.lastOk = now; st.lastAttempt = now; st.lastError = null; st.lastKind = null; st.fails = 0; st.backoffUntil = 0; st.blocked = null; st.lastNote = note || null; save("srcstatus", srcStat); }
   function noteFail(id, kind, msg) {
     var st = stOf(id), now = Date.now(); st.lastAttempt = now; st.lastError = red(msg).slice(0, 240); st.lastKind = kind; st.fails = (st.fails || 0) + 1;
     st.backoffUntil = now + Src.backoffMs(st.fails, kind);
@@ -314,7 +316,7 @@
     if (cats.some(function (c) { return Cat.BY_ID[c].core; })) { data.fetchedAt = newer > 0 ? now : Math.max(data.fetchedAt, stamp); data.source = label; data.origin = label; }
     cats.forEach(function (c) { data.catInfo[c] = { fetchedAt: newer > 0 ? now : Math.max((data.catInfo[c] && data.catInfo[c].fetchedAt) || 0, stamp), origin: label }; var m = mOf(c); m.lastOk = now; m.lastError = null; saveMeta(c); });
     persist(); emit();
-    return { ok: true, source: id, added: data.sats.length - before, updated: newer, message: "Updated " + r.sats.length + " element sets from " + Src.META[id].label + " (" + newer + " newer than what you had)." + (r.note ? " " + r.note : "") };
+    return { ok: true, source: id, at: now, added: data.sats.length - before, updated: newer, message: "Updated " + r.sats.length + " element sets from " + Src.META[id].label + " (" + newer + " newer than what you had)." + (r.note ? " " + r.note : "") };
   }
   /* The public refresh: try the enabled sources in the configured order; the first that delivers wins. Failures are recorded per source
      (exponential back-off, credential errors block until the credentials change) and summarised, e.g. "CelesTrak unreachable — using Space-Track". */
@@ -334,7 +336,7 @@
         if (id !== "celestrak" && st.blocked === "auth") { failed.push({ id: id, kind: "auth", skipped: true, reason: "credentials were rejected – fix them in Setup → Data sources" }); continue; }
         if (id !== "celestrak" && opts.auto && now - st.lastOk < Src.AUTO_MIN_MS[id]) { failed.push({ id: id, kind: "rate", skipped: true, reason: "refreshed recently" }); continue; }
         if (id === "spacetrack" && opts.auto && Src.avoidBusyMinute(now)) { failed.push({ id: id, kind: "rate", skipped: true, reason: "waiting for a quiet minute (Space-Track asks scripts to avoid :00 and :30)" }); continue; }
-        if (id !== "celestrak" && !opts.auto && now - st.lastOk < Src.MIN_PULL_MS[id] && st.lastOk && !opts.force && pullCats.every(function (c) { return catStatus(c).fetchedAt >= st.lastOk - 1; })) { failed.push({ id: id, kind: "rate", skipped: true, reason: "pulled less than " + Src.MIN_PULL_MS[id] / 3600e3 + " h ago (" + Src.META[id].label + " asks for no more)" }); continue; }
+        if (id !== "celestrak" && !opts.auto && now - st.lastOk < Src.MIN_PULL_MS[id] && st.lastOk && !opts.force && pullCats.every(function (c) { return (st.lastCats || []).indexOf(c) >= 0; })) { failed.push({ id: id, kind: "rate", skipped: true, reason: "pulled less than " + Src.MIN_PULL_MS[id] / 3600e3 + " h ago (" + Src.META[id].label + " asks for no more)" }); continue; }
         tried++;
         try {
           var r;
@@ -343,7 +345,8 @@
             // some CelesTrak queries failed: keep what arrived and ask the next source for the categories that are still missing
             if (r.failedCats && r.failedCats.length && i < chain.length - 1) { partial = r; pullCats = r.failedCats.filter(function (c) { return Cat.BY_ID[c]; }); noteOk(id, r.message); continue; }
           } else r = await refreshFromSource(id, pullCats, opts);
-          noteOk(id, r.message);
+          if (id !== "celestrak") stOf(id).lastCats = pullCats.slice();   // which categories the last successful pull covered (the hourly rule must not depend on the data age, which a 0-newer pull leaves alone)
+          noteOk(id, r.message, r.at);   // r.at = the very timestamp stored as the category fetchedAt (no ms skew between the two)
           if (partial) return Object.assign({}, r, { source: id, partialFrom: "celestrak", message: partial.message + " Missing " + pullCats.join(", ") + " filled from " + Src.META[id].label + ": " + r.message });
           var failedReal = failed.filter(function (f) { return !f.skipped || f.kind !== "config"; });
           return Object.assign({}, r, { source: id, fallbackFrom: failedReal.map(function (f) { return f.id; }), message: (failedReal.length ? Src.fallbackMessage(failedReal, id) + ". " : "") + r.message });
