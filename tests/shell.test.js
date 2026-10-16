@@ -17,7 +17,7 @@ ok(".nojekyll present (GitHub Pages)", fs.existsSync(path.join(root, ".nojekyll"
 ok("no CDN / third-party script or style at runtime", !/<(script|link)[^>]+(https?:)?\/\/(?!celestrak)[a-z0-9.-]+\//i.test(html) && !/https?:\/\/[^"']*\.(js|css)["']/.test(html));
 const sources = ["index.html", "sw.js", ...fs.readdirSync(path.join(root, "js")).filter(f => f.endsWith(".js")).map(f => "js/" + f)];
 const urls = sources.flatMap(f => [...rd(f).matchAll(/https?:\/\/[^\s"'<>)]+/g)].map(m => new URL(m[0].replace(/[.,;]+$/, "")).host));
-const allowed = new Set(["celestrak.org", "www.amsat.org", "github.com", "www.w3.org"]);
+const allowed = new Set(["celestrak.org", "www.amsat.org", "github.com", "www.w3.org", "eoportal.org", "space.oscar.wmo.int"]);
 ok("runtime code only references expected hosts", urls.every(h => allowed.has(h)), [...new Set(urls)].filter(h => !allowed.has(h)));
 const appVer = (rd("js/app.js").match(/APP_VERSION = "([\d.]+)"/) || [])[1], swVer = (sw.match(/const VERSION = "satpass-v([\d.]+)"/) || [])[1];
 ok("sw.js VERSION matches APP_VERSION in app.js", !!appVer && appVer === swVer, [appVer, swVer]);
@@ -29,4 +29,19 @@ const secretRe = /(api[_-]?key|secret|passw(or)?d|auth[_-]?token|BEGIN (RSA|OPEN
 const files = []; (function walk(d) { for (const f of fs.readdirSync(d)) { if (f === ".git" || f === "vendor") continue; const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : /\.(js|html|css|json|md|py|webmanifest)$/.test(f) && files.push(p); } })(root);
 const hits = files.filter(f => !f.endsWith("shell.test.js") && secretRe.test(fs.readFileSync(f, "utf8"))).map(f => path.relative(root, f));
 ok("no secret-looking strings in tracked sources", hits.length === 0, hits);
+// --- v1.1.0: categories, lazy snapshots, SAR docs
+const snapFiles = fs.readdirSync(path.join(root, "data", "snap")).filter(f => f.endsWith(".js"));
+ok("every lazy category snapshot (data/snap/*.js) and data/sar.js is precached by the service worker", snapFiles.length === 4 && snapFiles.every(f => shell.includes("data/snap/" + f)) && shell.includes("data/sar.js"), snapFiles);
+ok("the lazy snapshots are NOT loaded by index.html (only the core snapshot is)", !/data\/snap\//.test(html) && /data\/tle-snapshot\.js/.test(html));
+const { Cat: _c } = { Cat: require("../js/catalog.js") };
+ok("every non-core category has a bundled snapshot file named after its id", _c.CATEGORIES.filter(c => !c.core).every(c => snapFiles.includes(c.id + ".js")), _c.CATEGORIES.filter(c => !c.core).map(c => c.id));
+const sizes = Object.fromEntries(["data/tle-snapshot.js", ...snapFiles.map(f => "data/snap/" + f)].map(f => [f, fs.statSync(path.join(root, f)).size]));
+ok("the snapshot loaded at start stays small (< 40 KB); lazy ones < 40 KB each", sizes["data/tle-snapshot.js"] < 40000 && snapFiles.every(f => sizes["data/snap/" + f] < 40000), sizes);
+const rm = rd("README.md");
+ok("README documents all seven categories, the SAR panel, nominal/informational/not-for-reception warning, CelesTrak/OSCAR/eoPortal attribution", ["Amateur", "Stations", "Weather", "SAR", "Earth observation", "Navigation", "Science"].every(c => rm.includes(c)) && /not for reception/i.test(rm) && /informational/i.test(rm) && /nominal/i.test(rm) && /OSCAR/.test(rm) && /eoPortal/.test(rm) && /CelesTrak/.test(rm) && /frequency not verified/.test(rm));
+ok("README documents GROUP=radar is calibration spheres, Alpha-5 and the lazy fetch", /calibration spheres/.test(rm) && /Alpha-5/.test(rm) && /lazily/.test(rm));
+ok("README SAR table is in sync with data/sar.js (run: node tools/sar_table.js --write)", rm.includes("<!-- SAR-TABLE:START -->\n" + require("../tools/sar_table.js").table() + "\n<!-- SAR-TABLE:END -->"));
+ok("README release notes mention the app version", rm.includes("**" + appVer + "**"), appVer);
+ok("About text (app.js) carries the attribution and the not-for-reception warning", /eoPortal/.test(appJs) && /OSCAR/.test(appJs) && /not for reception/.test(appJs) && /CelesTrak/.test(appJs));
+ok("update_snapshot.py reads the category/query list from js/catalog.js and reuses cached responses for 2 h (7200 s)", /require\('\.\/js\/catalog\.js'\)/.test(rd("tools/update_snapshot.py")) && /< 7200/.test(rd("tools/update_snapshot.py")));
 done();

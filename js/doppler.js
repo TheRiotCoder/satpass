@@ -34,5 +34,9 @@
   function series(samples, upHz, downHz) {
     return samples.map(function (s) { var c = corrected(upHz, downHz, s.rrKmS); c.t = s.t; c.rrKmS = s.rrKmS; return c; });
   }
-  return { C_KMS: C_KMS, received: received, shift: shift, transmitFor: transmitFor, linearPair: linearPair, corrected: corrected, series: series };
+  /* SAR radar carrier: ONE-WAY carrier Doppler at the observer for a nominal radar centre frequency (Hz). Positive shift = approaching.
+     A real SAR works with the two-way Doppler centroid, which depends on the antenna pointing, so this is informational only. */
+  var RADAR_DOPPLER_LABEL = "one-way carrier Doppler at observer, informational; actual SAR processing uses two-way Doppler centroid with antenna pointing";
+  function radarOneWay(fHz, rrKmS) { return { receivedHz: received(fHz, rrKmS), shiftHz: shift(fHz, rrKmS) }; }
+  return { RADAR_DOPPLER_LABEL: RADAR_DOPPLER_LABEL, radarOneWay: radarOneWay, C_KMS: C_KMS, received: received, shift: shift, transmitFor: transmitFor, linearPair: linearPair, corrected: corrected, series: series };
 });

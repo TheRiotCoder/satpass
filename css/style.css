@@ -115,3 +115,14 @@ textarea.inp{min-height:110px;font:13px/1.3 ui-monospace,Menlo,Consolas,monospac
 .dopp-big b{font-size:1.25rem;color:var(--acc);font-variant-numeric:tabular-nums}
 .dopp-big span{display:block;font-size:.82rem;color:var(--muted)}
 @media (max-width:360px){.fields{grid-template-columns:1fr}}
+
+/* categories + SAR radar panel (v1.1) */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
+.chip{border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:999px;padding:6px 12px;min-height:36px;font:inherit;font-size:.9rem;cursor:pointer}
+.chip.on{background:var(--acc2);color:#fff;border-color:var(--acc2);font-weight:600}
+.chip .cnt{opacity:.7;font-size:.78rem;margin-left:2px;font-variant-numeric:tabular-nums}
+table.radar{width:100%;border-collapse:collapse;font-size:.92rem}
+table.radar th{text-align:left;font-weight:500;color:var(--muted);vertical-align:top;padding:5px 10px 5px 0;width:38%}
+table.radar td{padding:5px 0;word-break:break-word}
+table.radar tr+tr th,table.radar tr+tr td{border-top:1px solid var(--line)}
+.bad-txt{color:var(--warn)}

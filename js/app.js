@@ -1,8 +1,8 @@
 /* SatPass UI. Plain vanilla JS, hash-routed. Pure computation lives in the other modules (grid, doppler, passes, tle, ics, radio, format). */
 (function () {
   "use strict";
-  var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw;
-  var DAY = 86400000, APP_VERSION = "1.0.2";
+  var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog;
+  var DAY = 86400000, APP_VERSION = "1.1.0";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -77,6 +77,12 @@
     clearView();
     var h = (location.hash || "#/").replace(/^#\/?/, ""), parts = h.split("?")[0].split("/").map(decodeURIComponent), name = parts[0] || (S.hasLocation() ? "passes" : "passes");
     var fn = ROUTES[name] || ROUTES.passes;
+    // deep link / favourite to a satellite that lives in a lazily loaded category snapshot: load them first, then render
+    var wanted = parts.slice(1).map(Number).filter(function (x) { return x > 1000 && x < 400000; });
+    if (!S.allLoaded() && wanted.some(function (x) { return !entry(x); })) {
+      main.innerHTML = '<div class="banner">Loading satellite data…</div>'; var tk = view.token;
+      S.ensureAll().then(function () { if (tk === view.token) route(); }); return;
+    }
     $$("#tabs a").forEach(function (a) { a.classList.toggle("on", a.dataset.tab === (name === "pass" ? "passes" : ROUTES[name] ? name : "passes")); });
     window.scrollTo(0, 0);
     try { fn(parts.slice(1)); } catch (e) { console.error(e); main.innerHTML = '<div class="err">Something went wrong: ' + esc(e.message) + "</div>"; }
@@ -146,6 +152,17 @@
 
   /* ===================== PASSES ===================== */
   var SCOPES = { favs: "My favorites", curated: "All curated sats", visible: "ISS & Tiangong" };
+  function scopeLabels() {
+    var o = Object.assign({}, SCOPES);
+    Cat.CATEGORIES.forEach(function (c) { var k = S.members(c.id).length; o["cat:" + c.id] = "All " + c.label + (k ? " (" + k + ")" : ""); });
+    return o;
+  }
+  function scopeIds(scope) {
+    if (scope === "curated") return R.CURATED.map(function (c) { return c.norad; });
+    if (scope === "visible") return [25544, 48274];
+    if (scope.indexOf("cat:") === 0 && Cat.BY_ID[scope.slice(4)]) return S.members(scope.slice(4));
+    return S.settings.favs.slice();
+  }
   ROUTES.passes = function (a) {
     setTitle("Passes");
     if (!S.hasLocation()) {
@@ -154,11 +171,12 @@
       main.insertAdjacentHTML("beforeend", '<p class="disclaimer">Predictions use public TLEs and SGP4; verify before relying on them (see Setup → About).</p>');
       return;
     }
-    var single = a[0] ? Number(a[0]) : null, scope = single ? "single" : (S.load("scope", "favs")), visOnly = S.load("visOnly", false), s = S.settings;
+    var labels = scopeLabels(), single = a[0] ? Number(a[0]) : null, scope = single ? "single" : (S.load("scope", "favs")), visOnly = S.load("visOnly", false), s = S.settings;
     var token = view.token;
+    if (scope.indexOf("cat:") === 0 && !S.allLoaded()) { main.innerHTML = '<div class="banner">Loading satellite data…</div>'; S.ensureAll().then(function () { if (token === view.token) rerender("passes", a); }); return; }
     main.innerHTML = '<div class="toolbar">' +
       (single ? '<b>' + esc(longName(single)) + '</b> <a class="link" href="#/passes">← all</a>' :
-      '<select class="inp" id="scopeSel" aria-label="Satellites">' + Object.keys(SCOPES).map(function (k) { return '<option value="' + k + '"' + (k === scope ? " selected" : "") + ">" + SCOPES[k] + "</option>"; }).join("") + "</select>") +
+      '<select class="inp" id="scopeSel" aria-label="Satellites">' + Object.keys(labels).map(function (k) { return '<option value="' + k + '"' + (k === scope ? " selected" : "") + ">" + esc(labels[k]) + "</option>"; }).join("") + "</select>") +
       '<select class="inp" id="daysSel" aria-label="Days" style="flex:0 1 110px">' + [1, 2, 3, 5, 7, 10].map(function (d) { return '<option value="' + d + '"' + (d === s.days ? " selected" : "") + ">" + d + " day" + (d > 1 ? "s" : "") + "</option>"; }).join("") + "</select>" +
       '<select class="inp" id="elSel" aria-label="Minimum elevation" style="flex:0 1 110px">' + [0, 5, 10, 15, 20, 30, 45].map(function (d) { return '<option value="' + d + '"' + (d === s.minEl ? " selected" : "") + ">min " + d + "°</option>"; }).join("") + "</select>" +
       '<label class="muted" style="display:flex;align-items:center;gap:6px;min-height:40px"><input type="checkbox" id="visChk"' + (visOnly ? " checked" : "") + ' style="width:20px;height:20px"> visible only</label></div>' +
@@ -167,7 +185,7 @@
     $("#elSel").onchange = function () { S.set({ minEl: Number(this.value) }); passCache = {}; refreshNextBar(); rerender("passes", a); };
     if ($("#scopeSel")) $("#scopeSel").onchange = function () { S.save("scope", this.value); rerender("passes", a); };
     $("#visChk").onchange = function () { S.save("visOnly", this.checked); rerender("passes", a); };
-    var ids = single ? [single] : scope === "curated" ? R.CURATED.map(function (c) { return c.norad; }) : scope === "visible" ? [25544, 48274] : s.favs.slice();
+    var ids = single ? [single] : scopeIds(scope);
     ids = ids.filter(function (n) { return entry(n); });
     var stale = staleList(ids);
     if (stale.length) $("#staleBox").innerHTML = '<div class="banner warn">⚠️ Element sets older than ' + Tle.STALE_DAYS + ' days for: ' + stale.map(function (n) { return esc(nameOf(n)) + " (" + F.age(Date.now() - entry(n).epochMs) + ")"; }).join(", ") + '. Predictions may be off by minutes. Refresh on the <a class="link" href="#/sats">Sats</a> tab when online.</div>';
@@ -363,8 +381,12 @@
   function satSelectHtml(selected, onlyIds) {
     var favs = S.settings.favs, seen = {}, html = "";
     function opt(n) { if (seen[n] || !entry(n) || (onlyIds && onlyIds.indexOf(n) < 0)) return ""; seen[n] = 1; return '<option value="' + n + '"' + (n === selected ? " selected" : "") + ">" + esc(longName(n)) + "</option>"; }
-    var g1 = favs.map(opt).join(""), g2 = R.CURATED.map(function (c) { return opt(c.norad); }).join(""), g3 = S.data.sats.slice().sort(function (x, y) { return x.name < y.name ? -1 : 1; }).map(function (e) { return opt(e.norad); }).join("");
-    if (g1) html += '<optgroup label="Favorites">' + g1 + "</optgroup>"; if (g2) html += '<optgroup label="Curated">' + g2 + "</optgroup>"; if (g3) html += '<optgroup label="All satellites">' + g3 + "</optgroup>";
+    function byName(x, y) { return entry(x).name < entry(y).name ? -1 : 1; }
+    var g1 = favs.map(opt).join(""), g2 = R.CURATED.map(function (c) { return opt(c.norad); }).join("");
+    if (g1) html += '<optgroup label="Favorites">' + g1 + "</optgroup>"; if (g2) html += '<optgroup label="Curated">' + g2 + "</optgroup>";
+    Cat.CATEGORIES.forEach(function (c) { var g = S.members(c.id).sort(byName).map(opt).join(""); if (g) html += '<optgroup label="' + esc(c.label) + '">' + g + "</optgroup>"; });
+    var rest = S.data.sats.map(function (e) { return e.norad; }).sort(byName).map(opt).join("");
+    if (rest) html += '<optgroup label="Other satellites">' + rest + "</optgroup>";
     return html;
   }
   ROUTES.live = function (a) {
@@ -378,7 +400,7 @@
       '<section class="card"><div id="liveHead" class="note" style="margin-top:0"></div><div class="readout" id="liveRead"></div>' +
       '<div class="canvaswrap"><canvas id="map" role="img" aria-label="World map with satellite position and ground track"></canvas></div>' +
       '<p class="note">Map: <span style="color:#f472b6">●</span> satellite, solid line = next 100 min ground track, dashed = last 50 min, ring = radio horizon (0° elevation), amber ring = your minimum elevation, <span style="color:#4ade80">▲</span> you.</p>' +
-      '<div id="liveNext"></div><div class="actions"><a class="btn" href="#/passes/' + n + '">Passes for this satellite</a>' + (R.radios(n).length ? '<a class="btn" href="#/doppler/' + n + '">📻 Doppler</a>' : "") + "</div></section>" +
+      '<div id="liveNext"></div><div class="actions"><a class="btn" href="#/passes/' + n + '">Passes for this satellite</a>' + (R.radios(n).length ? '<a class="btn" href="#/doppler/' + n + '">📻 Doppler</a>' : radarInfoOf(n) ? '<a class="btn" href="#/doppler/' + n + '">📡 Radar</a>' : "") + "</div></section>" +
       '<p class="disclaimer">Position from SGP4 using a TLE ' + (entry(n) ? F.age(Date.now() - entry(n).epochMs) : "?") + ' old. Not for navigation.</p>';
     $("#liveSel").onchange = function () { go("#/live/" + this.value); };
     var fb = $("#liveFav"); function favState() { fb.textContent = S.isFav(n) ? "★ Favorite" : "☆ Favorite"; }
@@ -411,15 +433,99 @@
   };
 
   /* ===================== DOPPLER ===================== */
+  /* ---------- SAR radar helpers (Doppler tab) ---------- */
+  function radarInfoOf(n) { var e = entry(n); return Sar.forSat(n, e ? e.name : null); }
+  function sarIds() {
+    var order = {}; Sar.MISSIONS.forEach(function (m, i) { order[m.id] = i; });
+    return S.members("sar").filter(radarInfoOf).sort(function (x, y) { return (order[radarInfoOf(x).mission.id] - order[radarInfoOf(y).mission.id]) || (x - y); });
+  }
+  // <option>s for the Doppler satellite select: amateur/weather radios (unchanged) + SAR radar satellites
+  function dopplerSatOptions(n, radioSats) {
+    var sar = sarIds(); if (radarInfoOf(n) && entry(n) && sar.indexOf(n) < 0) sar.push(n);
+    function o(id, sfx) { return '<option value="' + id + '"' + (id === n ? " selected" : "") + ">" + esc(longName(id)) + (sfx || "") + "</option>"; }
+    var h = radioSats.map(function (id) { return o(id, entry(id) ? "" : " (no TLE)"); }).join("");
+    return sar.length ? '<optgroup label="Amateur &amp; weather radios">' + h + '</optgroup><optgroup label="SAR radar (informational)">' + sar.map(function (id) { return o(id); }).join("") + "</optgroup>" : h;
+  }
+  function mhzTxt(v) { return v >= 1000 ? v + " MHz (" + v / 1000 + " GHz)" : v + " MHz"; }
+  function hhmm(h) { var m = Math.round(h * 60) % 1440; return ("0" + Math.floor(m / 60)).slice(-2) + ":" + ("0" + (m % 60)).slice(-2); }
+  function safeLink(u) { return /^https:\/\//.test(u) ? '<a class="link" href="' + esc(u) + '" target="_blank" rel="noopener">' + esc(u.replace(/^https:\/\/(www\.)?/, "").replace(/\/$/, "").slice(0, 60)) + "</a>" : esc(u); }
+  function radarPanelHtml(info) {
+    var m = info.mission, fq = m.centerFreqMHz;
+    function kv(k, v) { return "<tr><th scope='row'>" + k + "</th><td>" + v + "</td></tr>"; }
+    var bw = m.bandwidthMHz != null ? "up to " + m.bandwidthMHz + " MHz" + (m.bandwidthNote ? " <span class='muted'>(" + esc(m.bandwidthNote) + ")</span>" : "") : "not verified" + (m.bandwidthNote ? " <span class='muted'>(" + esc(m.bandwidthNote) + ")</span>" : "");
+    var rows = kv("Mission", esc(m.name)) + kv("Operator", esc(m.operator)) + kv("Band", m.band ? esc(m.band) + "-band" : "not verified") +
+      kv("Centre frequency", fq != null ? "<b>" + mhzTxt(fq) + "</b>" + (m.approx ? ' <span class="tag warn">approximate</span>' : "") : '<b class="bad-txt">frequency not verified</b>') +
+      kv("Bandwidth", bw) + kv("Polarizations", m.polarizations ? esc(m.polarizations) : "not verified") + kv("Imaging modes", m.modes ? esc(m.modes) : "not verified") +
+      kv("Nominal swath", m.swathKm ? "≈ " + m.swathKm + " km <span class='muted'>(" + esc(m.swathMode || "") + ")</span>" : "not verified");
+    (m.secondary || []).forEach(function (b) { rows += kv("Second radar band", esc(b.band) + "-band · " + mhzTxt(b.centerFreqMHz) + (b.bandwidthMHz ? " · up to " + b.bandwidthMHz + " MHz" : "")); });
+    rows += kv("Sources", m.source.map(safeLink).join("<br>"));
+    return '<table class="radar">' + rows + "</table>" + (m.notes ? '<p class="note">' + esc(m.notes) + "</p>" : "");
+  }
+  function dopplerRadar(a, n) {
+    var info = radarInfoOf(n), m = info.mission, e = entry(n), sat = satObj(n), token = view.token, fHz = m.centerFreqMHz != null ? m.centerFreqMHz * 1e6 : null;
+    main.innerHTML = '<div class="banner warn">⚠️ <b>Radar frequency – informational only.</b> The values below are the satellite’s <i>nominal radar carrier</i> from the cited sources; they are <b>not for reception</b> (SAR data is downlinked in other bands) and individual modes differ. Where a value could not be verified it says so.</div>' +
+      '<div class="toolbar"><select class="inp" id="dSat" aria-label="Satellite">' + dopplerSatOptions(n, R.CURATED.filter(function (c) { return R.radios(c.norad).length; }).map(function (c) { return c.norad; })) + "</select></div>" +
+      '<section class="card" id="radarCard"><h2>' + esc(longName(n)) + ' <span class="muted">· SAR radar</span></h2>' + radarPanelHtml(info) + "</section>" +
+      '<section class="card"><h2>Now</h2><div id="rLive"></div>' + (fHz != null ? '<p class="note" id="rLabel">' + esc(D.RADAR_DOPPLER_LABEL) + "</p>" : "") + "</section>" +
+      '<section class="card"><h2>Across a pass</h2><div id="dPassSel"></div><div id="rGeo"></div><div class="tblwrap" id="dTbl"></div></section>';
+    $("#dSat").onchange = function () { go("#/doppler/" + this.value); };
+    function cell(l, v, cls) { return '<div class="' + (cls || "") + '"><small>' + l + "</small><b>" + v + "</b></div>"; }
+    function liveTick() {
+      var out = $("#rLive"); if (!out) return;
+      if (!sat) { out.innerHTML = '<div class="banner">No element set for this satellite (Sats tab).</div>'; return; }
+      var now = Date.now(), ni = P.nodeInfo(sat, now), html = "";
+      if (!S.hasLocation()) html += '<div class="banner">Set your location (<a class="link" href="#/settings">Setup</a>) for the Doppler at your position.</div>';
+      var s = S.hasLocation() ? P.stateAt(sat, observer(), now) : null;
+      html += '<div class="readout" style="margin-bottom:8px">' + (s ? cell("Elevation", fmt(s.el, 1) + "°", s.el > 0 ? "hot" : "") + cell("Range rate", fmt(s.rrKmS, 3) + " km/s") + cell("Azimuth", az(s.az)) : "") +
+        (ni ? cell("Direction", ni.ascending ? "Ascending ↑" : "Descending ↓") + cell("Local solar time", hhmm(ni.lstHours)) : "") + "</div>";
+      if (fHz == null) html += '<div class="banner">Centre frequency not verified for this satellite – Doppler not computed.</div>';
+      else if (s) { var r = D.radarOneWay(fHz, s.rrKmS); html += '<div class="dopp-big"><div><small>One-way carrier Doppler</small><b id="rShift">' + F.signedHz(r.shiftHz) + '</b><span>received ' + F.mhz(r.receivedHz, 6) + " MHz at nominal " + F.mhz(fHz, 3) + " MHz</span></div></div>"; }
+      html += '<p class="note">Direction = sign of the satellite’s north–south velocity at the sub-satellite point; local solar time is the <i>mean</i> solar time at that point (no equation of time).</p>';
+      out.innerHTML = html;
+    }
+    var passes = [], sel = null, passSel = $("#dPassSel");
+    function geoText() {
+      var box = $("#rGeo"); if (!box || !sel) return;
+      var g = P.passGeometry(sat, observer(), sel); if (!g) { box.innerHTML = ""; return; }
+      var line = "Pass direction <b>" + (g.ascending ? "ascending ↑" : "descending ↓") + "</b> · local solar time at closest approach <b>" + hhmm(g.lstHours) + "</b> (mean) · ground-track distance at closest approach <b>" + Math.round(g.groundTrackDistKm) + " km</b>";
+      var sw = m.swathKm ? (g.groundTrackDistKm <= m.swathKm ? '<span class="tag good">within ≈ swath width</span> of the ground track' : '<span class="tag warn">farther than ≈ swath width</span> from the ground track') + " (nominal " + m.swathKm + " km, " + esc(m.swathMode || "") + ")" : '<span class="muted">nominal swath not verified – proximity check unavailable</span>';
+      box.innerHTML = '<p class="note" style="margin-top:0">' + line + "<br>" + sw + '.</p><p class="note">Approximate: a SAR looks sideways (typically 20–50° incidence), so the imaged swath is offset from the ground track and its width depends on the mode. This only compares the observer’s distance from the ground track with a nominal swath width.</p>';
+    }
+    function fillTable() {
+      var tbl = $("#dTbl"); if (!tbl) return;
+      if (!sat || !S.hasLocation() || !sel || fHz == null) { tbl.innerHTML = ""; return; }
+      var dstep = Math.max(S.load("dopStep", 30), Math.ceil(sel.durationSec / 300 / 10) * 10), tr = P.trackPass(sat, observer(), sel.aos, sel.los, dstep);
+      var html = "<table><thead><tr><th>Time</th><th>El</th><th>Rate km/s</th><th>Carrier MHz</th><th>One-way Δ Hz</th></tr></thead><tbody>";
+      tr.forEach(function (x) { var r = D.radarOneWay(fHz, x.rrKmS); html += "<tr><td>" + clk(x.t, true) + "</td><td>" + fmt(x.el, 0) + "°</td><td>" + fmt(x.rrKmS, 2) + "</td><td>" + F.mhz(r.receivedHz, 5) + "</td><td>" + Math.round(r.shiftHz).toLocaleString("en-US") + "</td></tr>"; });
+      tbl.innerHTML = html + "</tbody></table>";
+    }
+    liveTick();
+    if (sat && S.hasLocation()) {
+      passSel.innerHTML = '<div class="note">Computing passes…</div>';
+      setTimeout(function () {
+        if (token !== view.token) return;
+        computePasses(n, 5); passes = passesFor(n, 5).slice(0, 10);
+        if (!passes.length) { passSel.innerHTML = '<div class="banner">No passes above ' + S.settings.minEl + "° in the next 5 days.</div>"; return; }
+        var want = Number(a[1]); sel = passes.filter(function (p) { return Math.abs(p.aos - want) < 5000; })[0] || passes[0];
+        passSel.innerHTML = '<div class="toolbar"><select class="inp" id="dPass" aria-label="Pass">' + passes.map(function (p) { var g = P.passGeometry(sat, observer(), p); return '<option value="' + Math.round(p.aos) + '"' + (p === sel ? " selected" : "") + ">" + F.date(p.aos, utc()) + " " + clk(p.aos) + " · max " + Math.round(p.maxEl) + "°" + (g ? (g.ascending ? " ↑" : " ↓") : "") + "</option>"; }).join("") + "</select></div>";
+        $("#dPass").onchange = function () { var w = Number(this.value); sel = passes.filter(function (p) { return Math.round(p.aos) === w; })[0]; geoText(); fillTable(); };
+        geoText(); fillTable();
+      }, 20);
+    } else passSel.innerHTML = "";
+    view.tick = liveTick; every(1000, liveTick);
+    if (e && Tle.isStale(e, Date.now())) main.insertAdjacentHTML("afterbegin", '<div class="banner warn">⚠️ TLE for ' + esc(nameOf(n)) + " is " + fmt(Tle.ageDays(e, Date.now()), 1) + " days old; Doppler/timing may be off.</div>");
+  }
   ROUTES.doppler = function (a) {
     setTitle("Doppler");
     var radioSats = R.CURATED.filter(function (c) { return R.radios(c.norad).length; }).map(function (c) { return c.norad; });
-    var n = a[0] ? Number(a[0]) : S.load("dopSat", 25544); if (radioSats.indexOf(n) < 0) n = 25544;
+    var n = a[0] ? Number(a[0]) : S.load("dopSat", 25544);
+    if (radarInfoOf(n) && entry(n)) { S.save("dopSat", n); return dopplerRadar(a, n); }
+    if (radioSats.indexOf(n) < 0) n = 25544;
     S.save("dopSat", n);
     var radios = R.radios(n), ri = R.pickRadio(n, S.load("dopRadio:" + n, 0)), frac = S.load("dopFrac", 0.5);
     var radio = radios[ri], e = entry(n), sat = satObj(n), token = view.token;
     main.innerHTML = '<div class="banner warn">⚠️ <b>Approximate.</b> ' + esc(R.DISCLAIMER) + " Frequencies, tones and operating modes change; many satellites are off or in safe mode for long periods.</div>" +
-      '<div class="toolbar"><select class="inp" id="dSat" aria-label="Satellite">' + radioSats.map(function (id) { return '<option value="' + id + '"' + (id === n ? " selected" : "") + ">" + esc(longName(id)) + (entry(id) ? "" : " (no TLE)") + "</option>"; }).join("") + "</select>" +
+      '<div class="toolbar"><select class="inp" id="dSat" aria-label="Satellite">' + dopplerSatOptions(n, radioSats) + "</select>" +
       (radios.length > 1 ? '<select class="inp" id="dRadio" aria-label="Transponder / mode">' + radios.map(function (r, i) { return '<option value="' + i + '"' + (i === ri ? " selected" : "") + ">" + esc(r.label) + "</option>"; }).join("") + "</select>" : "") + "</div>" +
       '<section class="card"><h2>' + esc(radio.label) + ' <span class="muted">· ' + esc(radio.mode) + "</span></h2>" +
       (radio.kind === "linear" ? '<div class="field"><label for="dFrac">Position in the passband: <b id="dFracTxt"></b> <span class="muted">(0 % = lowest downlink frequency)</span></label><input type="range" id="dFrac" class="slider" min="0" max="1000" value="' + Math.round(frac * 1000) + '"></div>' : "") +
@@ -478,56 +584,105 @@
   };
 
   /* ===================== SATELLITES ===================== */
+  function satHaystack(n) { var e = entry(n); return Cat.haystack(n, e ? e.name : null); }
+  function catLabel(id) { return Cat.BY_ID[id] ? Cat.BY_ID[id].label : id; }
   ROUTES.sats = function () {
     setTitle("Satellites");
-    var q = "", mode = S.load("satMode", "curated"), st = dataStatus(), now = Date.now();
+    var q = "", mode = S.load("satMode", "curated"), token = view.token, st = dataStatus(), now = Date.now();
+    if (!Cat.validMode(mode)) mode = "curated";
     main.innerHTML = '<section class="card"><h2>Orbital data (TLE)</h2><div class="note" style="margin-top:0" id="dsText"></div><div id="dsMsg"></div>' +
-      '<div class="actions"><button class="btn primary" id="refBtn">⟳ Refresh from CelesTrak</button></div><p class="note" id="refNote"></p>' +
+      '<div class="actions"><button class="btn primary" id="refBtn">⟳ Refresh from CelesTrak</button><button class="btn" id="refCatBtn" hidden></button></div><p class="note" id="refNote"></p><p class="note" id="catNote"></p>' +
       '<details class="more"><summary>Paste TLEs manually</summary><textarea class="inp" id="pasteTa" spellcheck="false" placeholder="ISS (ZARYA)\n1 25544U 98067A   ...\n2 25544  51.6400 ..."></textarea><div class="actions"><button class="btn" id="pasteBtn">Import pasted TLEs</button></div><p class="note">Use this if CelesTrak can\'t be reached from your network. Get TLEs from <a class="link" href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noopener">celestrak.org</a> or <a class="link" href="https://www.amsat.org/tle/current/nasa.all" target="_blank" rel="noopener">AMSAT</a> on another device.</p></details></section>' +
-      '<div class="toolbar"><input class="inp" id="q" type="search" placeholder="Search name or NORAD id" aria-label="Search satellites" autocomplete="off"><span class="seg" id="modeSeg">' + [["curated", "Curated"], ["favs", "★ Favs"], ["all", "All"]].map(function (m) { return '<button data-v="' + m[0] + '" class="' + (m[0] === mode ? "on" : "") + '">' + m[1] + "</button>"; }).join("") + '</span></div><div id="satList"></div>';
+      '<div class="toolbar"><input class="inp" id="q" type="search" placeholder="Search name, operator or NORAD id" aria-label="Search satellites" autocomplete="off"></div><div class="chips" id="modeSeg" role="group" aria-label="Category"></div><div id="satList"></div>';
+    function modeList() {
+      var l = [["curated", "Curated", null], ["favs", "★ Favs", S.settings.favs.length]];
+      Cat.CATEGORIES.forEach(function (c) { l.push([c.id, c.label, S.members(c.id).length]); });
+      l.push(["all", "All", S.data.sats.length]); if (S.searched().length) l.push(["searched", "Searched", S.searched().length]);
+      return l;
+    }
+    function chips() {
+      $("#modeSeg").innerHTML = modeList().map(function (m) { return '<button class="chip' + (m[0] === mode ? " on" : "") + '" data-v="' + m[0] + '" aria-pressed="' + (m[0] === mode) + '">' + esc(m[1]) + (m[2] != null ? ' <span class="cnt">' + m[2] + "</span>" : "") + "</button>"; }).join("");
+      $$("#modeSeg button").forEach(function (b) { b.onclick = function () { mode = b.dataset.v; S.save("satMode", mode); chips(); list(); status(); maybeAutoCat(); }; });
+    }
+    function curCat() { return Cat.BY_ID[mode] || null; }
     function status() {
       var d = dataStatus(), lo = S.lastOk(), le = S.lastError();
       $("#dsText").innerHTML = esc(d.text) + " <b>" + S.data.sats.length + "</b> satellites." + (d.stale ? ' <span class="tag warn">older than ' + Tle.STALE_DAYS + " d</span>" : "");
       $("#dsMsg").innerHTML = (d.stale ? '<div class="banner warn">⚠️ Element sets are older than ' + Tle.STALE_DAYS + " days. Predictions degrade quickly with age – refresh when online.</div>" : "") + (le && !refreshing ? '<div class="banner">Last refresh problem: ' + esc(le) + "</div>" : "");
       var allowed = S.manualAllowed(), nxt = lo ? new Date(lo + S.constants.MIN_MANUAL_MS) : null;
       $("#refBtn").disabled = refreshing || (!allowed && lo > 0);
-      $("#refNote").textContent = "Source: CelesTrak GP data (celestrak.org). To respect CelesTrak's rate guidance, SatPass refreshes automatically at most every " + S.constants.AUTO_REFRESH_MS / 3600e3 + " h and manually at most every " + S.constants.MIN_MANUAL_MS / 3600e3 + " h" + (!allowed && nxt ? " (next refresh available " + nxt.toLocaleTimeString() + ")" : "") + ".";
+      $("#refNote").textContent = "Source: CelesTrak GP data (celestrak.org). To respect CelesTrak's rate guidance, SatPass refreshes the core groups (Amateur, Stations, Weather) automatically at most every " + S.constants.AUTO_REFRESH_MS / 3600e3 + " h and manually at most every " + S.constants.MIN_MANUAL_MS / 3600e3 + " h" + (!allowed && nxt ? " (next refresh available " + nxt.toLocaleTimeString() + ")" : "") + ".";
+      var c = curCat(), cb = $("#refCatBtn"), cn = $("#catNote");
+      if (c && !c.core) {
+        var cs = S.catStatus(c.id), co = S.lastOk(c.id), ok2 = S.manualAllowed(Date.now(), c.id), nx2 = co ? new Date(co + S.constants.MIN_MANUAL_MS) : null;
+        cb.hidden = false; cb.disabled = refreshing || (!ok2 && co > 0); if (!refreshing) cb.textContent = "⟳ Refresh " + c.label + " (" + c.fetch.length + " quer" + (c.fetch.length > 1 ? "ies" : "y") + ")";
+        cn.textContent = c.label + " data: " + (cs.origin === "CelesTrak" ? "CelesTrak (live fetch)" : "bundled snapshot") + ", fetched " + (cs.fetchedAt ? new Date(cs.fetchedAt).toLocaleString() + " (" + F.age(Date.now() - cs.fetchedAt) + " ago)" : "—") + ". Fetched only when you open this category and it is older than " + S.constants.CAT_AUTO_MS / 3600e3 + " h (or when you tap refresh)" + (!ok2 && nx2 ? "; next manual refresh " + nx2.toLocaleTimeString() : "") + "." + (S.lastError(c.id) && !refreshing ? " Last problem: " + S.lastError(c.id) : "");
+      } else { cb.hidden = true; cn.textContent = ""; }
     }
     var refreshing = false;
-    $("#refBtn").onclick = function () {
-      refreshing = true; status(); $("#refBtn").textContent = "Fetching…";
-      S.refresh({ progress: function (i, n, id) { $("#refBtn").textContent = "Fetching " + (i + 1) + "/" + n + " (" + id + ")…"; } }).then(function (r) {
-        refreshing = false; $("#refBtn").textContent = "⟳ Refresh from CelesTrak"; passCache = {}; status(); list(); refreshNextBar();
+    function doRefresh(cats) {
+      if (refreshing) return; refreshing = true; var btn = cats ? $("#refCatBtn") : $("#refBtn"); status(); btn.textContent = "Fetching…";
+      S.refresh({ categories: cats, progress: function (i, n, id) { btn.textContent = "Fetching " + (i + 1) + "/" + n + "…"; } }).then(function (r) {
+        refreshing = false; if (token !== view.token) { passCache = {}; return; }
+        $("#refBtn").textContent = "⟳ Refresh from CelesTrak"; passCache = {}; chips(); status(); list(); refreshNextBar();
         $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner ' + (r.ok ? "good" : "bad") + '" id="refResult">' + esc(r.message) + "</div>");
       });
-    };
+    }
+    $("#refBtn").onclick = function () { doRefresh(null); };
+    $("#refCatBtn").onclick = function () { var c = curCat(); if (c) doRefresh([c.id]); };
+    // opening a non-core category refreshes it once if its data is older than a day (never while offline / backing off)
+    function maybeAutoCat() {
+      var c = curCat(); if (!c || c.core || refreshing || navigator.onLine === false) return;
+      if (S.staleCategories(c.id).indexOf(c.id) >= 0 && S.manualAllowed(Date.now(), c.id)) doRefresh([c.id]);
+    }
     $("#pasteBtn").onclick = function () {
       var r = S.importText($("#pasteTa").value); passCache = {}; status(); list(); refreshNextBar();
       $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner ' + (r.ok ? "good" : "bad") + '">' + esc(r.message) + "</div>"); if (r.ok) $("#pasteTa").value = "";
     };
+    function rowSub(n) {
+      var c = R.curated(n), r = radarInfoOf(n), cats = S.categoriesOf(n).filter(function (x) { return !(mode === x); }).map(catLabel);
+      var sub = c ? c.group : (cats.length ? cats.join(", ") : "");
+      if (r) sub = (r.mission.band ? r.mission.band + "-band " : "") + (r.mission.centerFreqMHz != null ? (r.mission.centerFreqMHz / 1000) + " GHz" : "freq. not verified") + " · " + r.mission.name.replace(/ \(.*/, "");
+      return sub;
+    }
     function list() {
-      var ql = q.trim().toLowerCase(), rows = [], seen = {}, now = Date.now();
+      var ql = q.trim().toLowerCase(), rows = [], seen = {}, now = Date.now(), cat = curCat(), extra = "";
       function add(n, label, sub, missing) { if (seen[n]) return; seen[n] = 1; rows.push({ n: n, label: label, sub: sub, missing: missing }); }
       var curIds = R.CURATED.map(function (c) { return c.norad; });
-      function consider(n) { var c = R.curated(n), e = entry(n); add(n, c ? c.label : e.name, c ? c.group : "", !e); }
-      if (ql || mode === "all") {
-        R.CURATED.forEach(function (c) { consider(c.norad); });
-        S.data.sats.slice().sort(function (x, y) { return x.name < y.name ? -1 : 1; }).forEach(function (e) { consider(e.norad); });
-      } else if (mode === "favs") S.settings.favs.forEach(consider);
+      function consider(n) { var c = R.curated(n), e = entry(n); if (!c && !e) return; add(n, c ? c.label : e.name, rowSub(n), !e); }
+      function byName(x, y) { return (entry(x) ? entry(x).name : "") < (entry(y) ? entry(y).name : "") ? -1 : 1; }
+      function everything() { R.CURATED.forEach(function (c) { consider(c.norad); }); S.data.sats.slice().sort(function (x, y) { return x.name < y.name ? -1 : 1; }).forEach(function (e) { consider(e.norad); }); }
+      if (cat) S.members(cat.id).sort(byName).forEach(consider);
+      else if (mode === "searched") S.searched().forEach(consider);
+      else if (ql || mode === "all") everything();
+      else if (mode === "favs") S.settings.favs.forEach(consider);
       else curIds.forEach(consider);
-      if (ql) rows = rows.filter(function (r) { var c = R.curated(r.n); return r.label.toLowerCase().indexOf(ql) >= 0 || String(r.n).indexOf(ql) >= 0 || (c && c.short.toLowerCase().indexOf(ql) >= 0); });
-      $("#satList").innerHTML = '<section class="card" style="padding:4px 10px">' + (rows.length ? rows.map(function (r) {
+      if (ql) rows = rows.filter(function (r) { return satHaystack(r.n).indexOf(ql) >= 0; });
+      var noTle = [];
+      if (cat && cat.id === "sar") Sar.noPublicTle().forEach(function (x) { if (!ql || (x.name + " " + x.mission.operator).toLowerCase().indexOf(ql) >= 0) noTle.push(x); });
+      $("#satList").innerHTML = '<section class="card" style="padding:4px 10px">' + (rows.length || noTle.length ? rows.map(function (r) {
         var e = entry(r.n), age = e ? Tle.ageDays(e, now) : 0, fav = S.isFav(r.n);
         return '<div class="sat"><button class="star' + (fav ? " on" : "") + '" data-n="' + r.n + '" aria-label="' + (fav ? "Remove favorite " : "Add favorite ") + esc(r.label) + '" aria-pressed="' + fav + '">' + (fav ? "★" : "☆") + "</button>" +
-          '<button class="nm" data-open="' + r.n + '"><b>' + esc(r.label) + "</b><span>NORAD " + r.n + (r.sub ? " · " + esc(r.sub) : "") + (R.radios(r.n).length ? " · radio" : "") + "</span></button>" +
+          '<button class="nm" data-open="' + r.n + '"><b>' + esc(r.label) + "</b><span>NORAD " + r.n + (r.sub ? " · " + esc(r.sub) : "") + (R.radios(r.n).length ? " · radio" : radarInfoOf(r.n) ? " · radar" : "") + "</span></button>" +
           (r.missing ? '<span class="tag bad">no TLE</span>' : '<span class="tag ' + (age > Tle.STALE_DAYS ? "warn" : "acc") + '">' + F.age(age * DAY) + "</span>") + "</div>";
-      }).join("") : '<p class="note">No satellites match.</p>') + "</section>" + (mode === "curated" && !ql ? '<p class="note">Some curated satellites (e.g. AO-92, CAS-4A/4B) currently have no element set in CelesTrak\'s public data (retired, re-entered or not published); search “All” for others, or paste TLEs above.</p>' : "");
-      $$("#satList .star").forEach(function (b) { b.onclick = function () { var on = S.toggleFav(Number(b.dataset.n)); b.classList.toggle("on", on); b.textContent = on ? "★" : "☆"; b.setAttribute("aria-pressed", on); refreshNextBar(); }; });
-      $$("#satList .nm").forEach(function (b) { b.onclick = function () { go("#/live/" + b.dataset.open); }; });
+      }).join("") + noTle.map(function (x) {
+        return '<div class="sat"><span class="star" aria-hidden="true">·</span><span class="nm"><b>' + esc(x.name) + "</b><span>" + esc((x.mission.band ? x.mission.band + "-band · " : "") + x.mission.operator) + '</span></span><span class="tag bad">no public TLE</span></div>';
+      }).join("") : '<p class="note">No satellites match.</p>') + "</section>";
+      if (mode === "curated" && !ql) extra += '<p class="note">Some curated satellites (e.g. AO-92, CAS-4A/4B) currently have no element set in CelesTrak\'s public data (retired, re-entered or not published); pick a category above, search, or paste TLEs.</p>';
+      if (cat && cat.id === "sar" && !ql) extra += '<p class="note">SAR list = curated missions (data/sar.js). Tap a satellite for the live tracker; the Doppler tab shows its nominal <i>radar</i> frequency (informational, not for reception). Satellites with no public element set are listed but cannot be tracked.</p>';
+      if (ql && ql.length >= 3 && rows.length === 0 && Cat.lookupCheck(q).ok) extra += '<div class="actions"><button class="btn" id="lookupBtn">🔎 Search CelesTrak for “' + esc(q.trim()) + '”</button></div><p class="note">Looks up this name or NORAD id on CelesTrak (one small request; mega-constellations such as Starlink need a number, e.g. “STARLINK-1234”).</p>';
+      else if (ql && ql.length >= 3 && rows.length === 0) extra += '<p class="note">' + esc(Cat.lookupCheck(q).reason || "") + "</p>";
+      $("#satList").insertAdjacentHTML("beforeend", extra);
+      var lb = $("#lookupBtn"); if (lb) lb.onclick = function () {
+        lb.disabled = true; lb.textContent = "Searching…";
+        S.lookup(q).then(function (r) { if (token !== view.token) return; if (r.ok) { mode = "searched"; S.save("satMode", mode); chips(); list(); status(); } else { lb.disabled = false; lb.textContent = "🔎 Search CelesTrak for “" + q.trim() + "”"; $("#dsMsg").insertAdjacentHTML("afterbegin", '<div class="banner bad">' + esc(r.message) + "</div>"); } });
+      };
+      $$("#satList .star[data-n]").forEach(function (b) { b.onclick = function () { var on = S.toggleFav(Number(b.dataset.n)); b.classList.toggle("on", on); b.textContent = on ? "★" : "☆"; b.setAttribute("aria-pressed", on); refreshNextBar(); var fc = $('#modeSeg [data-v="favs"] .cnt'); if (fc) fc.textContent = S.settings.favs.length; }; });
+      $$("#satList .nm[data-open]").forEach(function (b) { b.onclick = function () { go("#/live/" + b.dataset.open); }; });
     }
     $("#q").oninput = function () { q = this.value; list(); };
-    $$("#modeSeg button").forEach(function (b) { b.onclick = function () { mode = b.dataset.v; S.save("satMode", mode); $$("#modeSeg button").forEach(function (x) { x.classList.toggle("on", x === b); }); list(); }; });
-    status(); list();
+    chips(); status(); list();
+    S.ensureAll().then(function () { if (token !== view.token) return; chips(); list(); status(); maybeAutoCat(); });
   };
 
   /* ===================== SETTINGS ===================== */
@@ -546,6 +701,7 @@
       "<p><b>Approximations:</b> (1) elevations are <i>geometric</i> – no atmospheric refraction (~0.5° at the horizon), so real AOS/LOS happen slightly earlier/later; (2) sunlit/eclipse uses a simple <i>cylindrical Earth shadow</i> (spherical Earth, no penumbra or atmosphere) – transitions are good to a few seconds; (3) a pass is flagged <i>visible</i> when the satellite is sunlit, above your horizon and the sun is below <b>−6°</b> (civil twilight) – a rule of thumb, since brightness, sky glow, weather and terrain also matter; only ISS/Tiangong get the tag. Sun position uses a low-precision formula (~0.01°).</p>" +
       "<p><b>Long passes:</b> if a pass is already under way when computed, its true AOS is found by looking back (up to 24 h). A pass still open at the end of the window is followed until it ends (up to 14 h further); if it never ends within that limit it is marked <i>LOS ≥</i> (lower bound).</p>" +
       "<p><b>Frequencies</b> in the Doppler tab are approximate and change; verify with <a class='link' href='https://www.amsat.org/status/' target='_blank' rel='noopener'>AMSAT status</a>.</p>" +
+      "<p><b>Categories &amp; SAR:</b> the Sats tab groups satellites into Amateur, Stations, Weather, SAR, Earth observation, Navigation and Science (CelesTrak groups; the SAR list is curated). For SAR satellites the Doppler tab shows the <i>nominal radar carrier</i> (band, centre frequency, bandwidth, polarizations) instead of up/downlinks. <b>These radar frequencies are nominal, informational only and not for reception</b>; values that could not be verified are shown as “not verified”. Sources: agency/operator documents, <a class='link' href='https://eoportal.org' target='_blank' rel='noopener'>ESA eoPortal</a> and <a class='link' href='https://space.oscar.wmo.int' target='_blank' rel='noopener'>WMO OSCAR</a>. The Doppler shown for radar is the <i>one-way carrier Doppler at your position</i>; real SAR processing uses the two-way Doppler centroid with antenna pointing. Starlink and OneWeb are not listed (look up a single one by name in the search box).</p>" +
       "<p><b>Data:</b> TLEs from <a class='link' href='https://celestrak.org' target='_blank' rel='noopener'>CelesTrak</a> (Dr. T.S. Kelso). Coastlines: Natural Earth (public domain). Not affiliated with CelesTrak, AMSAT or NASA.</p>" +
       '<p>Everything runs on your device; your location is never uploaded.</p></div>' +
       '<div class="actions"><button class="btn" id="resetBtn">Reset favorites &amp; settings</button></div></section>';
@@ -562,7 +718,7 @@
     nb.onclick = function () { ensureNotifPermission().then(function (p) { notifState(); if (p === "granted") notify("SatPass test", "Notifications work while the app is running.", "./#/settings"); }); };
     notifState();
     renderInstallCard();
-    $("#resetBtn").onclick = function () { if (confirm("Reset location, favorites and preferences on this device? (Downloaded TLEs are kept.)")) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("satpass:") === 0 && k !== "satpass:tle" && k !== "satpass:tlemeta"; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (e) {} location.hash = "#/"; location.reload(); } };
+    $("#resetBtn").onclick = function () { if (confirm("Reset location, favorites and preferences on this device? (Downloaded TLEs are kept.)")) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("satpass:") === 0 && ["satpass:tle", "satpass:tlemeta", "satpass:groups", "satpass:catmeta", "satpass:lookups", "satpass:lookupmeta"].indexOf(k) < 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (e) {} location.hash = "#/"; location.reload(); } };
     if (window.caches) caches.keys().then(function (ks) { var k = ks.filter(function (x) { return x.indexOf("satpass-") === 0; })[0]; if (k && $("#swVer")) $("#swVer").textContent = "· cache " + k; });
   };
 
@@ -607,8 +763,13 @@
 
   /* ---------- boot ---------- */
   function autoRefresh() {
-    if (!S.nextAutoRefreshDue() || navigator.onLine === false) return;
-    S.refresh().then(function (r) { if (r.ok) { passCache = {}; toast("Orbital data updated from CelesTrak"); refreshNextBar(); if ((location.hash || "").indexOf("#/passes") === 0 || !location.hash) route(); } }).catch(function () {});
+    if (navigator.onLine === false) return;
+    var core = S.nextAutoRefreshDue() ? S.refresh().then(function (r) { if (r.ok) { passCache = {}; toast("Orbital data updated from CelesTrak"); refreshNextBar(); if ((location.hash || "").indexOf("#/passes") === 0 || !location.hash) route(); } }) : Promise.resolve();
+    // categories the user actually uses (a favourite in SAR, Earth observation, …) are refreshed at most once a day, one category at a time
+    core.then(function () { return S.ensureAll(); }).then(function () {
+      var st = S.staleCategories(); if (!st.length) return;
+      return S.refresh({ categories: st }).then(function (r) { if (r.ok) { passCache = {}; refreshNextBar(); } });
+    }).catch(function () {});
   }
   document.addEventListener("DOMContentLoaded", function () {
     main = $("#app"); titleEl = $("#title");
@@ -622,6 +783,7 @@
     window.addEventListener("online", autoRefresh);
     route(); install.init(); refreshNextBar();
     setInterval(function () { updateNextBar(); checkReminders(); }, 1000);
+    setTimeout(function () { S.ensureAll(); }, 1200);   // lazy category snapshots: load in the background once the first view is up (precached, so this also works offline)
     setTimeout(autoRefresh, 2500);
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
       navigator.serviceWorker.register("sw.js").then(function (reg) {

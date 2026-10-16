@@ -9,4 +9,11 @@ function snapshot() {
   const s = fs.readFileSync(path.join(__dirname, "..", "data", "tle-snapshot.js"), "utf8");
   return JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1));
 }
-module.exports = { ok, near, throws, done, snapshot };
+// all bundled snapshots: {core, sar, eo, nav, science} (the files are plain scripts that assign to window)
+function snapshotAll() {
+  const vm = require("vm"), win = {}, dir = path.join(__dirname, "..", "data");
+  vm.runInNewContext(fs.readFileSync(path.join(dir, "tle-snapshot.js"), "utf8"), { window: win });
+  for (const f of fs.readdirSync(path.join(dir, "snap")).filter(f => f.endsWith(".js"))) vm.runInNewContext(fs.readFileSync(path.join(dir, "snap", f), "utf8"), { window: win });
+  return Object.assign({ core: win.SATPASS_SNAPSHOT }, win.SATPASS_SNAPSHOTS);
+}
+module.exports = { ok, near, throws, done, snapshot, snapshotAll };

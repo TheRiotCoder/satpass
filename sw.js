@@ -1,11 +1,12 @@
 /* SatPass service worker (adapted from rf-toolbox) – offline app shell.
    VERSION is the single version string for the app (the About page reads it from the cache name). Bump it on every release. */
-const VERSION = "satpass-v1.0.2";
+const VERSION = "satpass-v1.1.0";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/style.css",
-  "js/vendor/satellite.min.js", "js/grid.js", "js/doppler.js", "js/format.js", "js/tle.js", "js/passes.js", "js/ics.js", "js/radio.js",
+  "js/vendor/satellite.min.js", "js/grid.js", "js/doppler.js", "js/format.js", "js/tle.js", "js/passes.js", "js/ics.js", "js/radio.js", "js/catalog.js",
   "js/store.js", "js/draw.js", "js/app.js",
-  "data/tle-snapshot.js", "data/world.js",
+  "data/tle-snapshot.js", "data/world.js", "data/sar.js",
+  "data/snap/sar.js", "data/snap/eo.js", "data/snap/nav.js", "data/snap/science.js",
   "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png", "icons/apple-touch-icon.png", "icons/favicon-32.png"
 ];
 const NAV_TIMEOUT_MS = 3500; // on slow "lie-fi" connections fall back to the cached shell after this long

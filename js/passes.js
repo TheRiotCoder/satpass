@@ -14,8 +14,16 @@
   function fail(m) { throw new RangeError(m); }
 
   /* ---------- satellite + observer ---------- */
+  // satellite.js expects a numeric catalog field; Alpha-5 TLEs (letter + 4 digits, NORAD id >= 100000) get a numeric stand-in
+  // (the number is not used by SGP4) and recomputed checksums.
+  function sgp4Lines(tle) {
+    if (/^[0-9 ]/.test(tle.l1.substr(2, 5))) return [tle.l1, tle.l2];
+    var num = ("00000" + (tle.norad % 100000)).slice(-5);
+    function fix(l, first) { var b = l.slice(0, 2) + num + l.slice(7, 68), sum = 0; for (var i = 0; i < 68; i++) { var c = b.charAt(i); if (c >= "0" && c <= "9") sum += +c; else if (c === "-") sum += 1; } return b + (sum % 10); }
+    return [fix(tle.l1), fix(tle.l2)];
+  }
   function makeSat(tle) {
-    var rec = satellite.twoline2satrec(tle.l1, tle.l2);
+    var ls = sgp4Lines(tle), rec = satellite.twoline2satrec(ls[0], ls[1]);
     if (rec.error) fail("Could not initialise orbit for " + (tle.name || "satellite") + " (SGP4 error " + rec.error + ")");
     var revsPerDay = rec.no * 1440 / (2 * Math.PI);          // rad/min -> rev/day
     return { tle: tle, name: tle.name, norad: tle.norad, rec: rec, revsPerDay: revsPerDay, periodMin: 1440 / revsPerDay, ecc: rec.ecco,
@@ -190,6 +198,29 @@
     for (var t = startMs; t <= endMs; t += stepSec * 1000) { var s = stateAt(sat, obs, t, true); if (s) out.push({ t: t, lat: s.latDeg, lon: s.lonDeg, alt: s.altKm }); }
     return out;
   }
+  /* ---------- orbit direction / local solar time / ground-track distance (SAR helpers) ---------- */
+  // Sub-satellite point and orbit direction at ms. ascending = the satellite is moving north (ECI/ECEF velocity z > 0; the z axis is
+  // shared by both frames). lstHours = MEAN local solar time (0–24 h) at the sub-satellite longitude: UTC hour + lon/15 (no equation of time).
+  function nodeInfo(sat, ms) {
+    var date = new Date(ms), pv = satellite.propagate(sat.rec, date);
+    if (!pv || !pv.position || typeof pv.position === "boolean" || !pv.velocity) return null;
+    var gd = satellite.eciToGeodetic(pv.position, satellite.gstime(date)), lon = gd.longitude * R2D;
+    if (lon > 180) lon -= 360; if (lon < -180) lon += 360;
+    var utcH = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600 + date.getUTCMilliseconds() / 3600000;
+    return { latDeg: gd.latitude * R2D, lonDeg: lon, altKm: gd.height, vzKmS: pv.velocity.z, ascending: pv.velocity.z > 0, lstHours: (((utcH + lon / 15) % 24) + 24) % 24 };
+  }
+  // great-circle distance (km, mean Earth radius) between two lat/lon points in degrees
+  function greatCircleKm(lat1, lon1, lat2, lon2) {
+    var a1 = lat1 * D2R, a2 = lat2 * D2R, dl = (lon2 - lon1) * D2R;
+    var h = Math.sin((a2 - a1) / 2) * Math.sin((a2 - a1) / 2) + Math.cos(a1) * Math.cos(a2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+    return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  // Pass geometry for a SAR-style view: orbit direction and local solar time at the time of closest approach, and the great-circle distance from the
+  // observer to the sub-satellite point then (ground-track distance). pass = a findPasses() result (uses pass.tca).
+  function passGeometry(sat, obs, pass) {
+    var ni = nodeInfo(sat, pass.tca); if (!ni) return null;
+    return { ascending: ni.ascending, lstHours: ni.lstHours, subLatDeg: ni.latDeg, subLonDeg: ni.lonDeg, groundTrackDistKm: greatCircleKm(obs.latDeg, obs.lonDeg, ni.latDeg, ni.lonDeg) };
+  }
   // footprint radius (central angle, degrees) for a satellite at altitude altKm seen above elevation elDeg
   function footprintAngleDeg(altKm, elDeg) {
     var re = 6371, el = (elDeg || 0) * D2R, x = re * Math.cos(el) / (re + altKm);
@@ -197,7 +228,7 @@
   }
   return {
     makeSat: makeSat, makeObserver: makeObserver, stateAt: stateAt, findPasses: findPasses, trackPass: trackPass, groundTrack: groundTrack,
-    sunEci: sunEci, sunElevation: sunElevation, isSunlit: isSunlit, gmstAt: gmstAt, footprintAngleDeg: footprintAngleDeg, julianDate: julianDate,
+    nodeInfo: nodeInfo, greatCircleKm: greatCircleKm, passGeometry: passGeometry, sgp4Lines: sgp4Lines, sunEci: sunEci, sunElevation: sunElevation, isSunlit: isSunlit, gmstAt: gmstAt, footprintAngleDeg: footprintAngleDeg, julianDate: julianDate,
     VISIBLE_SUN_EL: VISIBLE_SUN_EL, OMEGA_E: OMEGA_E
   };
 });

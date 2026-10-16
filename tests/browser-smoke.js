@@ -27,6 +27,7 @@ const results = [];
 function check(name, ok, info) { results.push(ok); console.log((ok ? 'PASS ' : 'FAIL ') + name + (info !== undefined ? ' -> ' + JSON.stringify(info) : '')); }
 const setVal = (sel, v) => `(() => { const e=document.querySelector(${JSON.stringify(sel)}); e.value=${JSON.stringify(v)}; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); })()`;
 const shot = async (name, full) => fs.writeFileSync(`${SHOTS}/${name}.png`, Buffer.from((await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !!full })).data, 'base64'));
+const reloadAt = async h => { await ev(`history.replaceState(null, '', ${JSON.stringify(h)})`); const l = waitEvent('Page.loadEventFired'); await send('Page.reload', {}); await l; };
 const go = async h => { await ev(`location.hash=${JSON.stringify(h)}`); await sleep(500); };
 const noOverflow = () => ev('document.documentElement.scrollWidth <= window.innerWidth + 1');
 // how many pixels of a canvas differ from its top-left pixel (proves something was drawn)
@@ -240,6 +241,100 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   check('sats no overflow', await noOverflow());
   await shot('07-sats');
 
+  // ---- v1.1: categories, SAR list, radar panel, favourites across categories, migration
+  const CATS = ['amateur', 'stations', 'weather', 'sar', 'eo', 'nav', 'science'];
+  await go('#/sats'); await sleep(1200);
+  const chipInfo = await ev(`[...document.querySelectorAll('#modeSeg .chip')].map(b => [b.dataset.v, +((b.querySelector('.cnt') || {}).textContent || 0)])`);
+  check('category chips with counts: Amateur, Stations, Weather, SAR, Earth obs., Navigation, Science', CATS.every(id => chipInfo.some(c => c[0] === id && c[1] > 0)), chipInfo);
+  await ev(`document.querySelector('#modeSeg [data-v="sar"]').click()`); await sleep(400);
+  const sarRows = await ev(`document.querySelectorAll('#satList .sat').length`);
+  check('SAR category lists the whole SAR catalogue (>=125 rows incl. no-TLE entries)', sarRows >= 125, sarRows);
+  check('SAR list contains Sentinel-1A, RADARSAT-2, ICEYE, NISAR, BIOMASS, COSMO-SkyMed + "no public TLE" entries', await ev(`['SENTINEL-1A','RADARSAT-2','ICEYE-X2','NISAR','COSMO-SKYMED 1','BIOMASS'].every(n => [...document.querySelectorAll('#satList .nm b')].some(b => b.textContent.includes(n))) && /no public TLE/.test(document.querySelector('#satList').textContent)`));
+  check('SAR rows show radar band + frequency', await ev(`/C-band 5\.405 GHz/.test([...document.querySelectorAll('#satList .nm')].find(b => /SENTINEL-1A/.test(b.textContent)).textContent)`));
+  await ev(setVal('#q', 'sentinel')); await sleep(250);
+  check('text filter inside category: "sentinel" -> the four Sentinel-1 satellites', await ev(`document.querySelectorAll('#satList .sat .nm').length`) === 4 || (await ev(`[...document.querySelectorAll('#satList .nm b')].map(b => b.textContent)`)));
+  await ev(setVal('#q', 'iss')); await sleep(250);
+  check('category filter excludes non-SAR satellites ("iss" finds no ISS inside SAR)', await ev(`![...document.querySelectorAll('#satList .nm b')].some(b => /ISS \(ZARYA\)/.test(b.textContent))`));
+  await ev(setVal('#q', 'x-band')); await sleep(250);
+  const xRows = await ev(`document.querySelectorAll('#satList .sat .nm').length`);
+  await ev(setVal('#q', 'l-band')); await sleep(250);
+  const lRows = await ev(`document.querySelectorAll('#satList .sat .nm').length`);
+  check('text filter by band: X-band > 80 rows, L-band between 5 and 20', xRows > 80 && lRows >= 5 && lRows <= 20, { xRows, lRows });
+  await ev(setVal('#q', '')); await ev(`document.querySelector('#modeSeg [data-v="amateur"]').click()`); await sleep(300);
+  check('Amateur category lists amateur satellites only (SO-50 yes, Sentinel no)', await ev(`(() => { const t = document.querySelector('#satList').textContent; return /SO-50/.test(t) && !/SENTINEL-1A/.test(t); })()`));
+  for (const c of ['nav', 'eo', 'science', 'weather', 'stations']) {
+    await ev(`document.querySelector('#modeSeg [data-v="${c}"]').click()`); await sleep(250);
+    const rows = await ev(`document.querySelectorAll('#satList .sat').length`), want = chipInfo.find(x => x[0] === c)[1];
+    check(`category "${c}" lists its ${want} satellites`, rows === want, { rows, want });
+  }
+  await ev(`document.querySelector('#modeSeg [data-v="nav"]').click()`); await sleep(200);
+  check('Navigation has GPS, Galileo, GLONASS, BeiDou', await ev(`(() => { const t = document.querySelector('#satList').textContent; return /GPS|NAVSTAR/.test(t) && /GSAT/.test(t) && /COSMOS/.test(t) && /BEIDOU/.test(t); })()`));
+  await ev(`document.querySelector('#modeSeg [data-v="all"]').click()`); await sleep(300);
+  check('no Starlink/OneWeb in any category or in "All"', await ev(`!/STARLINK|ONEWEB/i.test(document.querySelector('#satList').textContent)`));
+  await ev(setVal('#q', 'starlink')); await sleep(300);
+  check('"starlink" alone is not looked up (needs a number)', await ev(`!document.querySelector('#lookupBtn') && /thousands of satellites/.test(document.querySelector('#satList').textContent)`));
+  await ev(setVal('#q', '')); await sleep(100);
+  check('sats tab with chips: no overflow', await noOverflow());
+  await shot('07b-sats-sar');
+  await ev(`document.querySelector('#modeSeg [data-v="sar"]').click()`); await sleep(300);
+  // favourites across categories
+  await ev(setVal('#q', 'sentinel-1a')); await sleep(250);
+  const s1fav = await ev(`SatStore.isFav(39634)`); await ev(`document.querySelector('#satList .star[data-n="39634"]').click()`);
+  check('favourite a SAR satellite: persisted with the others', (await ev(`SatStore.isFav(39634)`)) !== s1fav && await ev(`JSON.parse(localStorage.getItem('satpass:settings')).favs.includes(39634) && SatStore.isFav(25544)`));
+  await ev(setVal('#q', '')); await go('#/live'); await sleep(800);
+  check('Live selector has category groups and the favourited SAR satellite', await ev(`(() => { const g = [...document.querySelectorAll('#liveSel optgroup')].map(o => o.label); return ['Favorites','Curated','Amateur','SAR','Earth observation','Navigation','Science'].every(l => g.includes(l)) && [...document.querySelectorAll('#liveSel optgroup[label="Favorites"] option')].some(o => o.value === '39634'); })()`));
+  await go('#/live/39634'); await sleep(1500);
+  check('live tracker for Sentinel-1A (SAR)', await ev(`/SENTINEL-1A/.test(document.querySelector('#liveSel').selectedOptions[0].textContent) && !!document.querySelector('a[href="#/doppler/39634"]')`) && (await canvasInk('#map')) > 3000);
+  await go('#/passes'); await sleep(2000);
+  check('Passes: "My favorites" now includes Sentinel-1A passes', await ev(`[...document.querySelectorAll('.pass .t1')].some(t => /SENTINEL-1A/.test(t.textContent))`));
+  await ev(setVal('#scopeSel', 'cat:sar')); let sarPasses = 0; const tp0 = Date.now(); for (let i = 0; i < 90 && !sarPasses; i++) { await sleep(1000); sarPasses = await ev(`document.querySelectorAll('.pass').length`); }
+  check('Passes scope "All SAR" lists passes for SAR satellites (computed in %ss)'.replace('%s', Math.round((Date.now() - tp0) / 1000)), sarPasses >= 20 && await ev(`new Set([...document.querySelectorAll('.pass')].map(b => b.dataset.n)).size >= 10`), sarPasses);
+  await ev(setVal('#scopeSel', 'favs')); await sleep(500);
+
+  // radar panel (Sentinel-1A) -- replaces up/downlink
+  await go('#/doppler/39634'); await sleep(2500);
+  const rp = await ev(`({ card: (document.querySelector('#radarCard') || {}).textContent || '', label: (document.querySelector('#rLabel') || {}).textContent || '', shift: (document.querySelector('#rShift') || {}).textContent || '',
+    live: (document.querySelector('#rLive') || {}).textContent || '', noUpDown: !document.querySelector('.dopp-big b + span') || !/uplink|downlink|Tune receiver|Transmit on/i.test(document.querySelector('#rLive').textContent),
+    exp: (() => { const s = SatPasses.stateAt(SatPasses.makeSat(SatStore.data.byId[39634]), SatPasses.makeObserver(SatStore.settings.lat, SatStore.settings.lon, SatStore.settings.alt), Date.now()); return -5405e6 * s.rrKmS / 299792.458; })() })`);
+  check('Sentinel-1A radar panel: C-band, 5405 MHz, 100 MHz, VV+VH, sources', /C-band/.test(rp.card) && /5405 MHz \(5\.405 GHz\)/.test(rp.card) && /100 MHz/.test(rp.card) && /VV\+VH/.test(rp.card) && /sentiwiki\.copernicus\.eu/.test(rp.card), rp.card.slice(0, 220));
+  check('radar panel shows the exact one-way Doppler label', rp.label.trim() === 'one-way carrier Doppler at observer, informational; actual SAR processing uses two-way Doppler centroid with antenna pointing.' || rp.label.indexOf('one-way carrier Doppler at observer, informational; actual SAR processing uses two-way Doppler centroid with antenna pointing') === 0, rp.label);
+  const sh = Number(rp.shift.replace(/,/g, '').replace('−', '-').replace(/[^\d.+\-]/g, ''));
+  check('one-way carrier Doppler value matches an independent computation (±300 Hz)', Math.abs(sh - rp.exp) < 300 && Math.abs(rp.exp) < 150000, { shown: rp.shift, expected: Math.round(rp.exp) });
+  check('radar panel has ascending/descending flag and local solar time', /Ascending|Descending/.test(rp.live) && /Local solar time\d\d:\d\d/.test(rp.live), rp.live.slice(0, 160));
+  check('radar view has no amateur up/downlink readout', rp.noUpDown);
+  await sleep(1500);
+  const pg = await ev(`(document.querySelector('#rGeo') || {}).textContent || ''`);
+  check('pass geometry: direction, local solar time at closest approach, ground-track distance, nominal swath check', /Pass direction (ascending|descending)/.test(pg) && /local solar time at closest approach \d\d:\d\d/.test(pg) && /ground-track distance at closest approach \d+ km/.test(pg) && /swath/.test(pg) && /Approximate/.test(pg), pg.slice(0, 260));
+  check('radar table across the pass rendered with one-way Δ Hz column', await ev(`document.querySelectorAll('#dTbl tbody tr').length`) > 5 && await ev(`/One-way Δ Hz/.test(document.querySelector('#dTbl').textContent)`));
+  check('Doppler select offers amateur radios and SAR radar group', await ev(`(() => { const g = [...document.querySelectorAll('#dSat optgroup')].map(o => o.label); return g.length === 2 && /SAR/.test(g[1]) && document.querySelectorAll('#dSat optgroup:nth-child(2) option').length > 100; })()`));
+  check('radar view: no overflow', await noOverflow());
+  await shot('07c-radar-sentinel1');
+  // unverified frequency (Capella) -> says so, no Doppler number
+  await go('#/doppler/57693'); await sleep(1500);
+  check('Capella (centre frequency unverified): "frequency not verified", no Doppler value', await ev(`/frequency not verified/.test(document.querySelector('#radarCard').textContent) && !document.querySelector('#rShift') && /not verified/.test(document.querySelector('#rLive').textContent)`));
+  // ICEYE-X83: NORAD 100889 (Alpha-5 TLE) works end to end
+  await go('#/doppler/100889'); await sleep(2500);
+  check('ICEYE-X83 (NORAD 100889, Alpha-5 TLE) tracks and shows 9650 MHz radar Doppler', await ev(`/9650 MHz/.test(document.querySelector('#radarCard').textContent) && !!document.querySelector('#rShift') && /ICEYE-X83/.test(document.querySelector('#dSat').selectedOptions[0].textContent)`));
+  // amateur Doppler unchanged
+  await go('#/doppler/25544'); await sleep(1500);
+  check('amateur Doppler UI unchanged (ISS: up/downlink boxes, no radar panel)', await ev(`document.querySelectorAll('.dopp-big b').length === 2 && !document.querySelector('#radarCard') && /Satellite frame: uplink/.test(document.querySelector('#dNominal').textContent)`));
+  // deep link to a lazily loaded satellite after a fresh page load
+  await ev(`localStorage.setItem('satpass:dopSat', '25544')`); await go('#/passes');
+  await reloadAt('#/live/60182'); await sleep(2500);
+  check('deep link to ALOS-4 (lazy SAR snapshot) opens the live tracker for it', await ev(`/ALOS-4/.test(document.querySelector('#liveSel').selectedOptions[0].textContent)`), await ev(`document.querySelector('#liveSel') && document.querySelector('#liveSel').selectedOptions[0].textContent`));
+
+  // v1.0.1 localStorage migration (settings without schema, old view modes, cached TLEs) -> kept, normalised
+  const keep = await ev(`JSON.stringify({ s: localStorage.getItem('satpass:settings'), m: localStorage.getItem('satpass:satMode') })`);
+  await ev(`localStorage.setItem('satpass:settings', JSON.stringify({ lat: 51.5074, lon: -0.1278, alt: 0, utc: false, minEl: 15, days: 5, favs: [25544, 27607, 7530, 27607, "x", -3], theme: "auto", leadMin: 10, installDismissed: 0 })); localStorage.setItem('satpass:satMode', JSON.stringify('favs')); localStorage.setItem('satpass:scope', JSON.stringify('curated'));`);
+  await reloadAt('#/sats'); await sleep(2000);
+  const mg = await ev(`({ st: JSON.parse(localStorage.getItem('satpass:settings')), mode: JSON.parse(localStorage.getItem('satpass:satMode')), on: (document.querySelector('#modeSeg .chip.on') || {}).dataset.v, rows: document.querySelectorAll('#satList .sat').length })`);
+  check('v1.0.1 data migrated: favourites/prefs kept (dedup, junk dropped), schema 2, saved view mode still honoured', JSON.stringify(mg.st.favs) === '[25544,27607,7530]' && mg.st.minEl === 15 && mg.st.days === 5 && mg.st.schema === 2 && mg.mode === 'favs' && mg.on === 'favs' && mg.rows === 3, mg);
+  await ev(`localStorage.setItem('satpass:satMode', JSON.stringify('bogus'))`);
+  ld = waitEvent('Page.loadEventFired'); await send('Page.reload', {}); await ld; await sleep(1500);
+  check('unknown saved view mode falls back to Curated', await ev(`(document.querySelector('#modeSeg .chip.on') || {}).dataset.v === 'curated'`));
+  const k = JSON.parse(keep); await ev(`localStorage.setItem('satpass:settings', ${JSON.stringify(k.s)}); localStorage.setItem('satpass:satMode', ${JSON.stringify(k.m)});`);
+  await reloadAt('#/passes'); await sleep(1500);
+
   // ---- desktop layout
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
   await go('#/passes'); await sleep(1500); check('desktop layout no overflow', await noOverflow()); await shot('08-desktop-passes');
@@ -291,6 +386,14 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
     check('offline: live tracker works from cached/bundled TLE', (await canvasInk('#map')) > 5000);
     await go('#/doppler/25544'); await sleep(1500);
     check('offline: Doppler works', await ev(`document.querySelectorAll('.dopp-big b').length`) === 2);
+    // SAR + other categories work offline from the precached lazy snapshots (page was reloaded offline, so these come from the service-worker cache)
+    await go('#/doppler/39634'); await sleep(2500);
+    check('offline: Sentinel-1A radar panel + Doppler from the bundled snapshot', await ev(`/5405 MHz/.test((document.querySelector('#radarCard')||{}).textContent||'') && !!document.querySelector('#rShift')`));
+    await go('#/sats'); await sleep(1200); await ev(`document.querySelector('#modeSeg [data-v="sar"]').click()`); await sleep(500);
+    check('offline: SAR category lists >=125 rows from the snapshot', await ev(`document.querySelectorAll('#satList .sat').length`) >= 125);
+    await ev(`document.querySelector('#modeSeg [data-v="eo"]').click()`); await sleep(400);
+    check('offline: Earth observation category lists satellites', await ev(`document.querySelectorAll('#satList .sat').length`) > 100);
+    check('offline: a failed automatic category refresh gives up after the first failed request (polite, no hammering)', problems.filter(m => /NAME=|CATNR=/.test(m)).length <= 2, problems.filter(m => /NAME=|CATNR=/.test(m)));
   }
   console.log('Console/log problems (online phase):', onlineProblems);
   console.log('All problems:', problems);

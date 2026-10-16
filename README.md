@@ -1,21 +1,23 @@
 # SatPass
 
-Satellite and ISS pass predictor for ham radio operators, as an installable, offline-capable web app (PWA). It runs on Android, iPhone, Windows, Mac and Linux. It is plain HTML/CSS/vanilla JS with **no build step and no CDN at runtime**.
+Satellite and ISS pass predictor for ham radio operators (and, since 1.1.0, for other satellite types incl. all public **SAR** satellites), as an installable, offline-capable web app (PWA). It runs on Android, iPhone, Windows, Mac and Linux. It is plain HTML/CSS/vanilla JS with **no build step and no CDN at runtime**.
 
 Predictions use public orbital elements (TLEs) from [CelesTrak](https://celestrak.org), propagated on your device with SGP4/SDP4. Your location never leaves the device.
 
-> **Heads-up on accuracy:** predictions are only as good as the TLE behind them. A fresh LEO TLE is typically good to a km or two (a few seconds of pass timing), and it degrades every day. SatPass warns when element sets are older than 7 days. Frequencies in the Doppler tab are approximate. See [Caveats](#caveats).
+> **Heads-up on accuracy:** predictions are only as good as the TLE behind them. A fresh LEO TLE is typically good to a km or two (a few seconds of pass timing), and it degrades every day. SatPass warns when element sets are older than 7 days. Frequencies in the Doppler tab are approximate (SAR radar frequencies are nominal and informational only). See [Caveats](#caveats).
 
 ## Features
 
 - **Location**: GPS button, manual lat/lon/elevation, **Maidenhead grid** entry and display (type a grid to get lat/lon, or lat/lon to get the grid; 4/6/8/10 characters). Saved in `localStorage`. Local-time / UTC toggle in the header.
 - **Satellite list** with search and favorites. Defaults to the **ISS (25544)**. The curated set covers ISS, Tiangong (CSS), SO-50, AO-91, AO-92, AO-7, RS-44, FO-29, AO-73, CAS-4A/4B, IO-117, TEVEL 1–9, NOAA 15/18/19 and Meteor-M2 3/4. All ~185 bundled satellites are searchable.
+- **Categories** (Sats tab chips with counts): **Amateur**, **Stations**, **Weather**, **SAR**, **Earth observation**, **Navigation** (GPS, Galileo, GLONASS, BeiDou) and **Science**, plus Favourites (across all categories) and name / NORAD / category search. Only Amateur, Stations and Weather load at start; the others are fetched the first time you open them (and cached). Starlink, OneWeb and geostationary satellites are not listed; a single Starlink/OneWeb can be looked up by name + number (e.g. `STARLINK-1234`).
+- **SAR satellites** ([list below](#sar-satellites-radar-panel)): the Doppler tab shows a **Radar panel** (band, nominal centre frequency, bandwidth, polarizations, modes, source) instead of up/downlinks, with the one-way carrier Doppler at your position, ascending/descending direction, local solar time and an approximate swath-proximity check at closest approach.
 - **Pass prediction** for 1–10 days: AOS / max-elevation (TCA) / LOS times, azimuth + compass point, duration, max elevation, sorted list, tap a pass for detail. Minimum-elevation filter (default 10°; AOS/LOS are when the satellite crosses that elevation). **VISIBLE** flag for ISS/Tiangong: satellite sunlit (Earth shadow test), observer's sun elevation below −6°, satellite above horizon.
 - **Pass detail**: polar sky plot (AOS/TCA/LOS marks, time ticks, visible part highlighted, live "NOW" marker), az/el/range/range-rate table at 10/20/30 s, `.ics` export, in-app reminder.
 - **Live tracker**: az, el, range, range-rate, lat/lon/alt, speed, sunlit/eclipsed, 1 s updates; equirectangular map with a small bundled coastline, ground track (past + future), footprint circle (0° horizon and your minimum elevation).
 - **Doppler calculator** with a bundled, *approximate* frequency table (FM repeaters, linear transponders, APRS/digital, APT/LRPT): live Doppler-corrected receive/transmit frequency, a passband slider for linear transponders, and a Doppler-vs-time table across any upcoming pass.
 - **Alerts**: "Next pass" countdown banner (favorites); per-pass reminders with the Notification API where the platform allows it; `.ics` calendar export (with an alert) for one pass or the whole list.
-- **Offline**: app shell, a bundled TLE snapshot and the map are precached. First launch offline works from the snapshot; cached TLEs are used afterwards.
+- **Offline**: app shell, bundled TLE snapshots for **every category** and the map are precached. First launch offline works from the snapshots; cached TLEs are used afterwards.
 
 ## Install
 
@@ -40,12 +42,56 @@ After the first visit it works without a connection.
 
 ## Data sources and attribution
 
-- **Orbital elements**: [CelesTrak](https://celestrak.org) GP data (Dr. T.S. Kelso) via `https://celestrak.org/NORAD/elements/gp.php` (`GROUP=stations|amateur|weather` plus `CATNR=25338/28654/33591` for NOAA 15/18/19, which aren't in a group). CelesTrak serves `Access-Control-Allow-Origin: *`, so the browser can fetch it directly. SatPass is not affiliated with or endorsed by CelesTrak.
-- **Rate courtesy**: CelesTrak asks clients not to re-download the same data more than about once every 2 hours. SatPass refreshes automatically at most every **6 h** (on launch/when back online), the manual button is allowed at most every **2 h**, failures back off 30 min, and a network error or HTTP 403/429 stops the batch immediately.
+- **Orbital elements**: [CelesTrak](https://celestrak.org) GP data (Dr. T.S. Kelso) via `https://celestrak.org/NORAD/elements/gp.php`. Groups used: `amateur`, `stations`, `weather` (+ `CATNR=25338/28654/33591` for NOAA 15/18/19, which aren't in a group), `resource` (Earth observation), `gps-ops`, `galileo`, `glo-ops`, `beidou` (Navigation) and `science`. **SAR** has no CelesTrak group (`GROUP=radar` is *radar calibration spheres*, not SAR satellites), so it is a curated list queried by name (`NAME=SENTINEL-1`, …). Satellites numbered ≥ 100000 (e.g. newer ICEYE) exist only in CelesTrak's JSON/OMM format; SatPass converts them to Alpha-5 TLEs (`A0889` for 100889). CelesTrak serves `Access-Control-Allow-Origin: *`, so the browser can fetch it directly. SatPass is not affiliated with or endorsed by CelesTrak.
+- **Rate courtesy**: CelesTrak asks clients not to re-download the same data more than about once every 2 hours. SatPass refreshes the three core categories automatically at most every **6 h**; the other categories are fetched **lazily** (first time you open them, otherwise the bundled snapshot is shown) and then at most once per **24 h** automatically; the manual button is allowed at most every **2 h** per category, requests are spaced ≥ 1.2 s apart, failures back off 30 min, and a network error or HTTP 403/429 stops the batch immediately. Name lookups are only for specific text, capped at 40 results, and never for whole mega-constellations.
 - **Fallbacks**: if CelesTrak can't be reached (offline, blocked by a network or content blocker) SatPass keeps the last cached/bundled TLEs and says so. You can also **paste TLEs** on the Sats tab.
-- **Bundled snapshot** (`data/tle-snapshot.js`, with its fetch time): used on first launch and offline. Regenerate with `python3 tools/update_snapshot.py` at release time.
+- **Bundled snapshots** (`data/tle-snapshot.js` = Amateur/Stations/Weather, loaded at start; `data/snap/{sar,eo,nav,science}.js` loaded on demand and precached by the service worker; each with its fetch time): used on first launch and offline. Regenerate everything with `python3 tools/update_snapshot.py` at release time (it caches responses and waits ≥ 2 h before re-requesting a query).
 - **Coastline** (`data/world.js`): simplified from Natural Earth 110m land (public domain), generated by `tools/make_world.py`.
 - **Frequencies** (`js/radio.js`): compiled from public amateur-satellite information; approximate and out of date quickly. Verify with [AMSAT's status page](https://www.amsat.org/status/) before operating.
+- **SAR radar parameters** (`data/sar.js`): taken from agency / operator documentation first (ESA SentiWiki, Canadian Space Agency, JAXA EORC, NASA/JPL NISAR, ISRO/NRSC, ICEYE, Capella, Synspective, iQPS, …), then [ESA eoPortal](https://www.eoportal.org) and the [WMO OSCAR](https://space.oscar.wmo.int) satellite database (WMO / OSCAR is acknowledged as a source; SatPass is not affiliated with either). Each mission lists its sources; NORAD ids were checked against CelesTrak.
+
+## SAR satellites (radar panel)
+
+<!-- SAR-TABLE:START -->
+| Mission | NORAD ids | Operator | Band | Nominal centre freq. | Max bandwidth | Sources | Public TLE |
+|---|---|---|---|---|---|---|---|
+| Sentinel-1 | 39634, 41456, 62261, 66315 | ESA / European Commission (Copernicus) | C | 5405 MHz | 100 MHz | [sentiwiki.copernicus.eu](https://sentiwiki.copernicus.eu/web/s1-mission) | yes |
+| RADARSAT-2 | 32382 | MDA (Canada) | C | 5405 MHz | 100 MHz | [asc-csa.gc.ca](https://www.asc-csa.gc.ca/eng/satellites/radarsat/technical-features/radarsat-comparison.asp) | yes |
+| RADARSAT Constellation Mission (RCM) | 44322, 44324, 44323 | Canadian Space Agency | C | 5405 MHz | 100 MHz | [asc-csa.gc.ca](https://www.asc-csa.gc.ca/eng/satellites/radarsat/technical-features/radarsat-comparison.asp) | yes |
+| TerraSAR-X | 31698 | DLR / Airbus Defence and Space | X | 9650 MHz | 300 MHz | [eoportal.org](https://www.eoportal.org/satellite-missions/terrasar-x) | yes |
+| TanDEM-X | 36605 | DLR / Airbus Defence and Space | X | 9650 MHz | 300 MHz | [eoportal.org](https://www.eoportal.org/satellite-missions/terrasar-x) | yes |
+| PAZ | 43215 | Hisdesat (Spain) | X | 9650 MHz | 300 MHz | [eoportal.org](https://www.eoportal.org/satellite-missions/paz) | yes |
+| COSMO-SkyMed (first generation) | 31598, 32376, 33412, 37216 | ASI / Italian Ministry of Defence | X | 9600 MHz | not verified | [space.oscar.wmo.int](https://space.oscar.wmo.int/instruments/view/sar_2000) | yes |
+| COSMO-SkyMed Second Generation (CSG) | 44873, 51444, 67304 | ASI / Italian Ministry of Defence | X | 9600 MHz | not verified | [space.oscar.wmo.int](https://space.oscar.wmo.int/instruments/view/csg_sar) | yes |
+| SAOCOM-1 | 43641, 46265 | CONAE (Argentina) | L | 1275 MHz | 50 MHz | [eoportal.org](https://www.eoportal.org/satellite-missions/saocom), [calvalportal.ceos.org](https://calvalportal.ceos.org/html/portal/sarc/documents/documents/CONAE_LF_19nov19_v5.pdf) | yes |
+| ALOS-2 (Daichi-2) | 39766 | JAXA (Japan) | L | 1257.5 MHz | 84 MHz | [earth.jaxa.jp](https://earth.jaxa.jp/files/research/ra/4th_ra_eo/material/EORA4_APPENDIX4-5_ALOS-2_ALOS-4.pdf) | yes |
+| ALOS-4 (Daichi-4) | 60182 | JAXA (Japan) | L | 1257.5 MHz | 84 MHz | [earth.jaxa.jp](https://earth.jaxa.jp/files/research/ra/4th_ra_eo/material/EORA4_APPENDIX4-5_ALOS-2_ALOS-4.pdf) | yes |
+| NISAR | 65053 | NASA / ISRO | L | 1257.5 MHz | 84 MHz | [space.oscar.wmo.int](https://space.oscar.wmo.int/satellites/view/nisar), [space.oscar.wmo.int](https://space.oscar.wmo.int/instruments/view/sar_l_nisar), [nisar.jpl.nasa.gov](https://nisar.jpl.nasa.gov/mission/get-to-know-nisar/) | yes |
+| BIOMASS | 63772 | ESA | P | 435 MHz | 6 MHz | [earth.esa.int](https://earth.esa.int/eogateway/missions/biomass/description) | yes |
+| NovaSAR-1 | 43619 | SSTL / UK Space Agency | S | 3200 MHz | 90 MHz | [research.csiro.au](https://research.csiro.au/cceo/wp-content/uploads/sites/252/2020/09/NovaSAR-1_2017_IEEE.pdf) | yes |
+| KOMPSAT-5 (Arirang-5) | 39227 | KARI (South Korea) | X | 9660 MHz | 240 MHz | [terranor.no](https://www.terranor.no/ImageData/KOMPSAT-5_Standard_Products_Specifications_v1.2.pdf) | yes |
+| EOS-04 (RISAT-1A) | 51656 | ISRO | C | 5400 MHz | 75 MHz | [nrsc.gov.in](https://www.nrsc.gov.in/nrscnew/assets/pdf/announcements/E04_handbook.pdf), [nrsc.gov.in](https://www.nrsc.gov.in/nrscnew/assets/pdf/announcements/EOS_04_writeup_modified.pdf) | yes |
+| RISAT-2B / 2BR1 / 2BR2 (EOS-01) | 44233, 44857, 46905 | ISRO | X | 9590 MHz | not verified | [space.oscar.wmo.int](https://space.oscar.wmo.int/instruments/view/sar_x_risat_2) | yes |
+| Gaofen-3 | 41727, 49495, 52200 | CNSA (China) | C | 5400 MHz | 240 MHz | [eoportal.org](https://www.eoportal.org/satellite-missions/gaofen-3) | yes |
+| LuTan-1 (Ludi Tance-1, L-SAR) | 51284, 51822 | China (Ministry of Natural Resources) | L | frequency not verified | 84 MHz | [isprs-archives.copernicus.org](https://isprs-archives.copernicus.org/articles/XLVIII-1-W2-2023/1251/2023/isprs-archives-XLVIII-1-W2-2023-1251-2023.pdf) | yes |
+| HJ-2E / HJ-2F | 54035, 57519 | CRESDA (China) | S | 2700 MHz (approx.) | not verified | [space.oscar.wmo.int](https://space.oscar.wmo.int/instruments/view/sar_s) | yes |
+| ASNARO-2 | 43152 | NEC / JEOSS (Japan) | X | 9650 MHz (approx.) | not verified | [jeoss.co.jp](https://jeoss.co.jp/asnaro2/images/ASNARO-2-Product-Guide_icon_202110_EN.pdf) | yes |
+| ICEYE | 57 satellites (43800–100914) | ICEYE (Finland) | X | 9650 MHz | 1200 MHz | [iceye-ltd.github.io](https://iceye-ltd.github.io/product-documentation/6.0.2/productspecification/introduction/), [sar.iceye.com](https://sar.iceye.com/6.0.8/productspecification/imagingmodes/) | yes |
+| Capella (Acadia) | 9 satellites (57693–68485) | Capella Space (USA) | X | frequency not verified | 600 MHz | [support.capellaspace.com](https://support.capellaspace.com/what-types-of-sensors-do-capellas-satellites-use), [capellaspace.com](https://www.capellaspace.com/solution/sensor-technology) | yes |
+| Umbra | 58297, 60541, 60547, 66748, 67371 | Umbra (USA) | X | 9800 MHz | 1200 MHz | [eoportal.org](https://www.eoportal.org/satellite-missions/umbra-sar) | yes |
+| StriX (Synspective) | 11 satellites (53815–100829) | Synspective (Japan) | X | 9650 MHz | 600 MHz | [synspective.com](https://synspective.com/satellite/satellite-strix/), [synspective.com](https://synspective.com/data/synspective-sar-data/) | yes |
+| QPS-SAR (iQPS) | 11 satellites (58578–100401) | iQPS (Japan) | X | 9600 MHz | 600 MHz | [i-qps.net](https://i-qps.net/en/product/), [space.oscar.wmo.int](https://space.oscar.wmo.int/instruments/view/qps_sar) | yes |
+| KOMPSAT-6 (Arirang-6) | – | KARI (South Korea) | X | frequency not verified | not verified | [celestrak.org](https://celestrak.org/NORAD/elements/gp.php?NAME=KOMPSAT&FORMAT=json) | no public TLE |
+| TecSAR-1 / Ofek-series radar satellites | – | Israel (IAI / Ministry of Defense) | X | frequency not verified | not verified | [celestrak.org](https://celestrak.org/NORAD/elements/gp.php?NAME=TECSAR&FORMAT=json) | no public TLE |
+<!-- SAR-TABLE:END -->
+
+**Read this before relying on the numbers.**
+- Radar frequencies are **nominal** centre frequencies of the radar instrument (band names per IEEE: P 0.3–1, L 1–2, S 2–4, C 4–8, X 8–12 GHz). They are **informational only and not for reception**: SAR downlinks use other bands, individual satellites, modes and tuning may differ, and nothing here helps to receive or transmit.
+- A value that could not be verified from a source is shown as **"frequency not verified"** (or "not verified") rather than guessed; values marked *approx.* are approximate. Bandwidth is the largest verified bandwidth; imaging modes use less.
+- **One-way carrier Doppler** (shown in the radar panel) = −f·(range rate)/c at *your* position. It is labelled "one-way carrier Doppler at observer, informational; actual SAR processing uses two-way Doppler centroid with antenna pointing". It is not the Doppler centroid of a SAR image.
+- **Ascending/descending** is the sign of the z-component of the satellite's inertial (TEME) velocity at closest approach (north-going = ascending); **local solar time** is the *mean* local solar time (UTC hour + longitude/15, no equation of time) of the sub-satellite point; **swath proximity** compares the distance from you to the ground track with a nominal swath width of a representative mode and is approximate (look angles, mode and pointing are not modelled).
+- Sentinel-1B failed in December 2021 but CelesTrak still publishes elements for it; it is listed and marked *failed*. Sentinel-6 (a radar altimeter) is not SAR and is excluded. KOMPSAT-6 and TecSAR-1 are listed as **no public TLE** (not in CelesTrak's public data). NISAR also carries an S-band radar (shown as secondary).
+- The catalogue is curated by hand and is a snapshot in time; missions launched later can be found by name/NORAD search (a new `ICEYE-X…` is recognised as SAR automatically).
 
 ## How it works / SGP4 choice
 
@@ -69,6 +115,7 @@ Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry,
 
 ## Release notes
 
+- **1.1.0** – Categories: Amateur, Stations, Weather, SAR, Earth observation, Navigation and Science (CelesTrak groups, lazy per-category fetch/caching, bundled snapshot for each so it works offline), favourites across categories, category + text search, on-demand name/NORAD lookup (Starlink/OneWeb need a number). New curated **SAR** list (28 missions, 131 satellites with public TLEs) with a **Radar panel** on the Doppler tab (nominal band, centre frequency, bandwidth, polarizations, modes, sources; one-way carrier Doppler; ascending/descending, local solar time, swath proximity). Alpha-5/OMM support for NORAD ≥ 100000. v1.0.1 favourites and settings are migrated. The amateur Doppler UI is unchanged. The bundled snapshot grew from 29 KB to ~111 KB (core 30 KB loaded at start; the other categories are loaded lazily).
 - **1.0.2** – Fix: on the Doppler tab, choosing a radio/mode other than the first (e.g. ISS voice repeater) made the live Tune/Transmit readout flicker back to the first radio's (APRS 145.825 MHz) frequencies. Cause: selects re-rendered the view by calling the route function directly, which left the previous render's 1 s timer running; it kept overwriting the new DOM with the old radio. Views are now re-rendered through `rerender()` (clears the old timers) and every timer is bound to its view. Regression tests: `tests/radio.test.js` and the "Doppler radio selection must stick" block in the browser smoke test.
 - 1.0.1 – findPasses window-edge fixes, finer scan, strict longitude validation.
 
@@ -80,12 +127,14 @@ node --experimental-websocket tests/browser-smoke.js        # headless Chrome (C
 SKIP_NET=1 node --experimental-websocket tests/browser-smoke.js   # same, without touching celestrak.org
 python3 -m venv /tmp/pyv && /tmp/pyv/bin/pip install sgp4 skyfield   # independent cross-check:
 node tests/crosscheck/dump.js > /tmp/d.json && /tmp/pyv/bin/python tests/crosscheck/crosscheck.py /tmp/d.json
+node tests/crosscheck/dump_sar.js > /tmp/s.json && /tmp/pyv/bin/python tests/crosscheck/sar_crosscheck.py /tmp/s.json   # SAR asc/desc, local solar time, radar Doppler, Alpha-5 vs skyfield/sgp4
+node tools/sar_table.js --write                              # regenerate the README SAR table from data/sar.js
 node tests/crosscheck/dump_matrix.js > /tmp/m.json && /tmp/pyv/bin/python tests/crosscheck/brute_passes.py /tmp/m.json   # 1-s brute-force pass finder vs findPasses over sat x observer x minEl
 ```
 
 The cross-check compares our output with python-sgp4 and Skyfield (JPL DE421) for all bundled satellites (positions < 0.3 m), pass AOS/TCA/LOS for ISS, SO-50, AO-7, RS-44, NOAA 19, AO-10 and AO-91 (< 0.25 s), az/el, range-rate, sun elevation and sunlit state.
 
-Project layout: `index.html`, `css/`, `js/` (pure UMD modules `grid`, `doppler`, `format`, `tle`, `passes`, `ics`, `radio`; browser layers `store`, `draw`, `app`; `vendor/satellite.min.js`), `data/`, `icons/`, `sw.js`, `manifest.webmanifest`, `tools/` (icon, snapshot and map generators), `tests/`.
+Project layout: `index.html`, `css/`, `js/` (pure UMD modules `grid`, `doppler`, `format`, `tle`, `passes`, `ics`, `radio`, `catalog`; browser layers `store`, `draw`, `app`; `vendor/satellite.min.js`), `data/` (incl. `sar.js` and `snap/`), `icons/`, `sw.js`, `manifest.webmanifest`, `tools/` (icon, snapshot and map generators), `tests/`.
 
 ## Hosting
 
@@ -97,7 +146,8 @@ Static files only; all paths are relative, so it works from a sub-path such as G
 - **Visible passes** are geometric (sunlit satellite, dark sky, above the horizon). Brightness, weather, terrain, refraction and attitude are not modelled. The VISIBLE tag is only applied to bright objects (ISS, Tiangong).
 - **Doppler** is first-order (non-relativistic); frequencies, tones and satellite status change and some satellites are off for long periods. Approximate by design.
 - **AO-92, CAS-4A and CAS-4B** are in the catalogue/frequency table but have **no current element set in CelesTrak's public data** at the time of the snapshot (retired/decayed/unpublished); paste TLEs if you have them. NOAA 15/18/19 APT was being retired; check they're still transmitting.
-- **Geostationary** satellites are skipped by the pass finder (they don't "pass").
+- **SAR radar frequencies** are nominal and informational (see [SAR satellites](#sar-satellites-radar-panel)); several are marked "frequency not verified" (Capella, LuTan-1, KOMPSAT-6, TecSAR-1) and HJ-2E/F and ASNARO-2 are approximate. NovaSAR-1's 3.2 GHz is the nominal centre of its 3.1–3.3 GHz S-band allocation; iQPS quotes 9.6 GHz for QPS-SAR while WMO OSCAR lists 9.38 GHz.
+- **Starlink / OneWeb / other mega-constellations** are not in any category (thousands of satellites); look up a single satellite by name + number. **Geostationary** satellites are skipped by the pass finder (they don't "pass").
 - **Notifications**: see above. iOS requires a Home Screen install, and nothing can fire while the app is fully closed.
 - **Privacy**: location and settings live only in this browser's `localStorage`. The only network traffic is the CelesTrak GET requests.
 - Developed and tested in desktop headless Chrome and node; not yet exercised on physical Android/iOS devices.
@@ -106,4 +156,4 @@ Static files only; all paths are relative, so it works from a sub-path such as G
 
 - App code: no licence file has been chosen yet (all rights reserved by default until the owner adds one).
 - `js/vendor/satellite.min.js`: satellite.js © Shashwat Kandadai, MIT (see `js/vendor/satellite.js-LICENSE.md`).
-- TLE data © CelesTrak; follow [CelesTrak's usage terms](https://celestrak.org/webmaster.php). Natural Earth data is public domain.
+- TLE data © CelesTrak; satellite metadata from [WMO OSCAR](https://space.oscar.wmo.int) and [ESA eoPortal](https://www.eoportal.org) is cited per mission and remains theirs; follow [CelesTrak's usage terms](https://celestrak.org/webmaster.php). Natural Earth data is public domain.
