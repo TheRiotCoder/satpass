@@ -1,5 +1,7 @@
 # SatPass
 
+**▶ Open the app: <https://satpass-3wj.pages.dev>** (Cloudflare Pages, its own origin – biometric unlock works there). The old GitHub Pages copy `https://theriotcoder.github.io/satpass/` is a **deprecated mirror**: it keeps working (also offline) and shows a notice, but biometric unlock is not offered on it. Saved logins and favourites are stored per address and do **not** move: on the old copy use *Setup → Credentials → Encrypted backup → Export*, then *Import* on the new address.
+
 Satellite and ISS pass predictor for ham radio operators (and, since 1.1.0, for other satellite types incl. all public **SAR** satellites), as an installable, offline-capable web app (PWA). It runs on Android, iPhone, Windows, Mac and Linux. It is plain HTML/CSS/vanilla JS with **no build step and no CDN at runtime**.
 
 Predictions use public orbital elements (TLEs) from [CelesTrak](https://celestrak.org), propagated on your device with SGP4/SDP4. Your location never leaves the device.
@@ -165,6 +167,7 @@ Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry,
 
 ## Release notes
 
+- **1.3.4** – Own origin: served from Cloudflare Pages `https://satpass-3wj.pages.dev` (headers file, build script, redeploy docs, proxy origin), GitHub Pages is a deprecated mirror with a notice banner.
 - **1.3.3** – Concurrency/rotation fixes: all vault operations (save, passphrase change, unlock, biometric, lock) run through one queue and the lock waits for them (no more all-zero-key vaults or unopenable vaults from lock races); a passphrase change now rotates the data key and switches biometric off (re-enrol); hosting wording corrected (a GitHub Pages custom domain is still a shared origin). See `CHANGELOG.md`.
 - **1.3.2** – Security recheck of the biometric unlock: not offered (and records deleted) on shared `github.io` origins; vault now encrypts under a random data key (passphrase and PRF each wrap the key; the passphrase is never wrapped), legacy blobs migrate on unlock; padded wrap, header-authenticated backups, confirm before a backup import overwrites anything, non-discoverable passkey, clearer Reset (see `CHANGELOG.md`).
 - **1.3.1** – Export SAR list: *Sats → SAR* has ⬇ CSV, ⬇ JSON and ⧉ Copy buttons – one row per satellite (135 rows, 28 missions, incl. missions with no public TLE), columns `mission, operator, band, centerFreqMHz, bandwidthMHz, approx, polarizations, modes, swathKm, swathMode, secondaryBands, noradId, satName, satNote, notes, sources`; unverified values stay blank; offline, UTF-8 BOM CSV (see `CHANGELOG.md`).
@@ -193,7 +196,25 @@ The cross-check compares our output with python-sgp4 and Skyfield (JPL DE421) fo
 
 Project layout: `index.html`, `css/`, `js/` (pure UMD modules `grid`, `doppler`, `format`, `tle`, `passes`, `ics`, `radio`, `catalog`, `sources`; browser layers `store`, `draw`, `app`; `vendor/satellite.min.js`), `proxy/` (optional Cloudflare Worker), `data/` (incl. `sar.js` and `snap/`), `icons/`, `sw.js`, `manifest.webmanifest`, `tools/` (icon, snapshot and map generators), `tests/`.
 
-## Hosting
+## Deploying to Cloudflare Pages (the primary host, 1.3.4)
+
+SatPass is static files, served from the Cloudflare Pages project **`satpass`** (`https://satpass-3wj.pages.dev`; the `-3wj` suffix was assigned by Cloudflare). Because `pages.dev` is a public suffix, every project has its own browser origin, so the passkey and the encrypted vault are not shared with other apps (this is what makes biometric unlock safe; see above). Files in the repo that make it work: `public/_headers` (the real CSP + security headers, kept identical to the `<meta>` CSP in `index.html`, plus `frame-ancestors 'none'`, nosniff, no-referrer, COOP, HSTS, Permissions-Policy, no-cache for `sw.js`/`index.html`, and removal of Pages' default `Access-Control-Allow-Origin: *`), `tools/build-site.sh` (copies exactly the app files + `_headers` + a real `404.html` into `dist/`; tests, proxy and tools are not uploaded) and `wrangler.toml`. Routing is hash-based, so no SPA fallback is needed; the service worker and manifest use relative paths and work at the root of the origin.
+
+**Redeploy (manual, ~1 minute):**
+```
+sh tools/build-site.sh
+export CLOUDFLARE_ACCOUNT_ID=<your account id>      # and CLOUDFLARE_API_TOKEN=<token with Cloudflare Pages: Edit>, or run `npx wrangler login` once
+npx wrangler pages deploy dist --project-name satpass --branch main
+```
+(Node 20+; wrangler 4 asks for Node 22 on some systems. Run it from a directory that has a writable `node_modules`/`package.json` above it – wrangler keeps a cache there and fails with a permission error if the nearest `node_modules` is not writable, which happened on a box with a root-owned `/node_modules`; copying `dist/` next to a scratch `package.json` is enough.) Then check `curl -sI https://satpass-3wj.pages.dev/ | grep -i content-security` and that `https://satpass-3wj.pages.dev/sw.js` shows the new `satpass-vX.Y.Z`. Bump `VERSION` in `sw.js` (and `APP_VERSION`) for every release – the app shows an *update ready* bar when a new service worker is waiting.
+
+**Optional auto-deploy from GitHub:** Cloudflare dashboard → Workers & Pages → the `satpass` project → Settings → Builds → *Connect to Git* → `TheRiotCoder/satpass`, production branch `main`, **build command** `sh tools/build-site.sh`, **build output directory** `dist`. (A project created by direct upload cannot be switched to Git integration; create a new Pages project for that and move the custom domain/name over.) Alternatively a GitHub Action running the redeploy commands above with the token stored as a repository *secret*.
+
+**Token hygiene:** use a token scoped to *Account → Cloudflare Pages → Edit* (nothing else, one account) with an expiry date; keep it only in your password manager, a CI secret or a shell environment variable – never in the repo, a README, an issue or a chat. If a token was ever pasted anywhere visible (for example inside a saved `curl` command), **roll it** in the Cloudflare dashboard (My Profile → API Tokens → Roll) and store only the bare token string.
+
+**Proxy:** your SatPass proxy Worker only answers origins listed in `ALLOWED_ORIGINS` (`proxy/wrangler.toml`, exact origins, comma separated). The shipped config now lists `https://satpass-3wj.pages.dev` and `https://theriotcoder.github.io`; if you already deployed the proxy, **redeploy it** (`cd proxy && npx wrangler deploy`) or edit the variable in the dashboard (Workers → satpass-proxy → Settings → Variables). `*.workers.dev` proxy URLs are allowed by the CSP `connect-src` on both hosts.
+
+## Hosting (any other static host)
 
 Static files only; all paths are relative, so it works from a sub-path such as GitHub Pages `https://<user>.github.io/satpass/` (`.nojekyll` is included). Serve over HTTPS (required for the service worker, geolocation and notifications). Bump `VERSION` in `sw.js` on every release; the app shows an "update ready" bar when a new service worker is waiting.
 

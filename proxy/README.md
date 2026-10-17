@@ -26,7 +26,7 @@ and adds CORS headers **for your SatPass origin only**.
 
 1. Create a free account at <https://dash.cloudflare.com/sign-up> (this is *your* account; SatPass never sees it).
 2. `cd proxy && npx wrangler login && npx wrangler deploy` (needs Node 18+). Note the printed URL, e.g. `https://satpass-proxy.yourname.workers.dev`.
-3. If you host SatPass somewhere other than `https://theriotcoder.github.io`, edit `ALLOWED_ORIGINS` in `wrangler.toml` first (exact origins, comma separated).
+3. `ALLOWED_ORIGINS` in `wrangler.toml` lists the SatPass origins that may call the proxy (exact origins, comma separated): the shipped value is `https://satpass-3wj.pages.dev` (primary) and `https://theriotcoder.github.io` (deprecated mirror). If you host SatPass somewhere else, add that origin first; if you deployed an older version, redeploy after pulling this change.
 4. In SatPass → Setup → **Data sources**, paste the URL into *Proxy URL* and press **Test connection** on any source (it checks `/health` first).
 
 ### Recommended: keep your credentials on the Worker, not in the browser

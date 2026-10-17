@@ -117,7 +117,8 @@ module.exports = async function run(h) {
   const v2Rec = JSON.stringify({ v: 2, credId: "Y3JlZA", prfSalt: "c2FsdA==", rpId: new URL(bioUrl).hostname, created: 1, hk: "AAAA", iv: "AAAA", ct: "AAAA" });
   await nav(bioUrl); await ev(`localStorage.setItem('satpass:bio', ${JSON.stringify(oldRec)})`); await nav(bioUrl);
   check("1.3.2: a 1.3.0/1.3.1 biometric record (v1, it wrapped the passphrase) is deleted on load", await ev(`localStorage.getItem('satpass:bio') === null`));
-  if (!LOCAL) {
+  const SHARED_HOST = /\.github\.io$/.test(new URL(APP).hostname), BIO_HERE = LOCAL || !SHARED_HOST;   // live: github.io = shared origin (biometrics off); any dedicated host (pages.dev) = biometrics on
+  if (!BIO_HERE) {
     await ev(`localStorage.setItem('satpass:bio', ${JSON.stringify(v2Rec)})`); await nav(bioUrl);
     check("1.3.2 (shared github.io origin): even a well-formed v2 biometric record is deleted on load", await ev(`localStorage.getItem('satpass:bio') === null`));
     await settings(); await ev(`SatStore.sources.setCreds({ n2yoKey: ${JSON.stringify(SEC.n2)} })`); await set("#passIn", SEC.pass); await ev(`${q("#passLock")}.click()`); await waitFor(`SatStore.sources.credMode() === 'encrypted'`, 8000); await settings(); await sleep(800);
@@ -128,7 +129,7 @@ module.exports = async function run(h) {
   await send("WebAuthn.enable", { enableUI: false });
   const mkAuth = async (o) => (await send("WebAuthn.addVirtualAuthenticator", { options: Object.assign({ protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true }, o) })).authenticatorId;
   let auth = await mkAuth({});
-  await nav(bioUrl); await ev(`localStorage.clear(); sessionStorage.clear()`); await nav(bioUrl); await settings();
+  await nav(bioUrl); await (LOCAL ? ev(`localStorage.clear(); sessionStorage.clear()`) : wipeVault()); await nav(bioUrl); await settings();
   await set("#n2Key", SEC.n2); await set("#stId", SEC.id); await set("#stPw", SEC.pw);
   await ev(`SatStore.sources.setCreds({ n2yoKey: ${JSON.stringify(SEC.n2)}, stIdentity: ${JSON.stringify(SEC.id)}, stPassword: ${JSON.stringify(SEC.pw)} })`);
   check("1.3.0 (virtual authenticator): the biometric option is NOT offered before an encrypted vault exists", await ev(`!document.querySelector('#bioEnable')`));
@@ -167,9 +168,25 @@ module.exports = async function run(h) {
   check("1.3.0 (virtual authenticator): an authenticator without PRF is refused with a clear message and nothing is stored", await ev(`localStorage.getItem('satpass:bio') === null && /PRF|passphrase/.test(${q("#passMsg")}.textContent)`), await ev(`${q("#passMsg")}.textContent`));
   await send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: auth }); await send("WebAuthn.disable");
   check("1.3.3 (virtual authenticator): changing the passphrase rotates the key, switches biometric off and says so; after re-enrolling, biometric unlocks again", await (async () => { await send("WebAuthn.enable", { enableUI: false }); const a2 = await mkAuth({}); await settings(); await waitFor(`!!${q("#bioEnable")}`, 5000); await ev(`${q("#bioEnable")}.click()`); await waitFor(`!!${q("#bioOn")}`, 10000); const blob0 = await ev(`localStorage.getItem('satpass:creds')`); await set("#passIn", "a-brand-new-passphrase-9"); await ev(`${q("#passLock")}.click()`); await waitFor(`/Biometric unlock was switched off/.test((${q("#passMsg")} || {}).textContent || '')`, 10000); const gone = await ev(`localStorage.getItem('satpass:bio') === null && !document.querySelector('#bioOn') && !!document.querySelector('#bioEnable')`); const b1 = JSON.parse(await ev(`localStorage.getItem('satpass:creds')`)), b0 = JSON.parse(blob0); const rotated = b1.wk !== b0.wk && b1.ct !== b0.ct; await ev(`${q("#bioEnable")}.click()`); await waitFor(`!!${q("#bioOn")}`, 10000); await ev(`SatStore.sources.lockNow()`); await ev(`SatStore.sources.bioUnlock(rec => SatBio.assertPrf(rec))`); const ok2 = await ev(`!SatStore.sources.isLocked() && SatStore.sources.getCreds().stPassword === ${JSON.stringify(SEC.pw)}`); await send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: a2 }); await send("WebAuthn.disable"); return gone && rotated && ok2; })());
-  await ev(`SatStore.sources.forgetCreds()`); await ev(`localStorage.clear(); sessionStorage.clear()`);
+  await ev(`SatStore.sources.forgetCreds()`); await (LOCAL ? ev(`localStorage.clear(); sessionStorage.clear()`) : wipeVault());
 
   await send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+  }
+  // ================= part 4b (1.3.4): own origin on Cloudflare Pages / notice on GitHub Pages
+  await nav(APP); await sleep(600);
+  const moved = await ev(`(() => { const b = document.getElementById('moved-bar'); return { shown: !b.hidden, href: (b.querySelector('a') || {}).href || '', text: b.textContent }; })()`);
+  check("1.3.4: the 'moved' notice appears on the shared github.io mirror (with the new URL + backup pointer) and nowhere else", SHARED_HOST ? moved.shown && moved.href === "https://satpass-3wj.pages.dev/" && /Encrypted backup/.test(moved.text) : !moved.shown, JSON.stringify(moved));
+  if (SHARED_HOST) {
+    await ev(`document.getElementById('movedHide').click()`); await nav(APP); await sleep(400);
+    check("1.3.4: 'Hide' dismisses the notice and it stays hidden after a reload; the app itself still works there", await ev(`document.getElementById('moved-bar').hidden === true && !!document.querySelector('#title')`));
+    await ev(`localStorage.removeItem('satpass:movedHide')`);
+  }
+  if (!LOCAL && !SHARED_HOST) {
+    const hd = await ev(`fetch(location.href).then(r => ({ csp: r.headers.get('content-security-policy') || '', xcto: r.headers.get('x-content-type-options'), rp: r.headers.get('referrer-policy'), xfo: r.headers.get('x-frame-options'), acao: r.headers.get('access-control-allow-origin'), pp: r.headers.get('permissions-policy') || '', coop: r.headers.get('cross-origin-opener-policy') }))`);
+    check("1.3.4 (live host): real CSP header incl. frame-ancestors 'none', nosniff, no-referrer, DENY, COOP, Permissions-Policy; no ACAO *", /script-src 'self'/.test(hd.csp) && /frame-ancestors 'none'/.test(hd.csp) && /connect-src 'self' https:\/\/celestrak\.org https:\/\/\*\.workers\.dev/.test(hd.csp) && hd.xcto === "nosniff" && hd.rp === "no-referrer" && hd.xfo === "DENY" && hd.coop === "same-origin" && /publickey-credentials-get=\(self\)/.test(hd.pp) && !hd.acao, JSON.stringify(hd));
+    const sw = await ev(`navigator.serviceWorker.getRegistration().then(r => r ? { scope: r.scope, active: !!r.active } : null)`);
+    check("1.3.4 (live host): the service worker is registered with scope = the origin root", !!sw && sw.scope === new URL(APP).origin + "/" && sw.active, JSON.stringify(sw));
+    check("1.3.4 (live host): sharedOrigin() is false here and biometric enrolment is allowed by the store", await ev(`SatSources.sharedOrigin(location.hostname) === false && SatStore.sources.bioAllowed() === true`));
   }
   // ================= part 5 (1.3.1): Export SAR list buttons
   await nav(APP); await ev(`localStorage.setItem('satpass:satMode', JSON.stringify('sar'))`); await nav(APP); await ev(`location.hash = '#/sats'`); await sleep(1200);

@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.3.3";
+  var DAY = 86400000, APP_VERSION = "1.3.4";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -12,6 +12,13 @@
   function toast(msg, ms) {
     var t = $("#toast"); t.textContent = msg; t.hidden = false; t.classList.add("show");
     clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove("show"); t.hidden = true; }, ms || 2600);
+  }
+  /* 1.3.4: SatPass now lives on its own origin (biometric unlock needs one). The GitHub Pages copy keeps working offline and keeps its data - no redirect - and shows this notice. */
+  var HOME_URL = "https://satpass-3wj.pages.dev/";
+  function movedBar() {
+    var bar = $("#moved-bar"); if (!bar || !Src.sharedOrigin(location.hostname) || S.load("movedHide", false)) return;
+    bar.innerHTML = '📦 <span>SatPass has a new home: <a href="' + HOME_URL + '" rel="noopener">' + esc(HOME_URL.replace(/^https:\/\//, "").replace(/\/$/, "")) + '</a> (its own address, so biometric unlock works there). This copy keeps working, also offline. Saved logins and favourites do not move automatically: use <a href="#/settings">Setup → Encrypted backup</a> here, then import it there.</span> <button class="btn sm" id="movedHide" type="button">Hide</button>';
+    bar.hidden = false; $("#movedHide").onclick = function () { S.save("movedHide", true); bar.hidden = true; };
   }
   function isStandalone() { return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true; }
   function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
@@ -1050,7 +1057,7 @@
     window.addEventListener("hashchange", route);
     window.addEventListener("resize", function () { if (view.resize) view.resize(); });
     window.addEventListener("online", autoRefresh);
-    route(); install.init(); refreshNextBar();
+    route(); install.init(); refreshNextBar(); movedBar();
     // Auto-lock (1.3.0): an encrypted vault forgets its decrypted credentials after idle time / while the page is hidden.
     (function () {
       var lastActive = Date.now(), hiddenSince = document.hidden ? Date.now() : null;

@@ -1,0 +1,24 @@
+# Cloudflare static-assets headers (Workers static assets / Pages syntax). The CSP below matches the <meta> CSP in index.html
+# (kept there too for the GitHub Pages mirror / file:// use) and adds what a meta tag cannot carry: frame-ancestors, plus the other security headers.
+# Keep the two policies identical (tests/shell.test.js checks that).
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; connect-src 'self' https://celestrak.org https://*.workers.dev
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Frame-Options: DENY
+  Cross-Origin-Opener-Policy: same-origin
+  Strict-Transport-Security: max-age=31536000
+  ! Access-Control-Allow-Origin
+  Permissions-Policy: geolocation=(self), publickey-credentials-get=(self), publickey-credentials-create=(self), camera=(), microphone=(), payment=(), usb=(), serial=(), bluetooth=()
+
+# (Pages adds 'Access-Control-Allow-Origin: *' to every asset by default; the line above removes it - nothing cross-origin needs to read the app)
+
+# the service worker and the shell must always be revalidated so a release is picked up at once
+/sw.js
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Cache-Control: no-cache
+/
+  Cache-Control: no-cache

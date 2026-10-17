@@ -1,0 +1,7 @@
+# SatPass front end on its own origin: Cloudflare Pages project "satpass" (https://satpass-3wj.pages.dev), static files only, no Functions.
+# Deploy:  sh tools/build-site.sh && npx wrangler pages deploy dist --project-name satpass --branch main     (see README "Deploying to Cloudflare Pages")
+# Needs Node 20+ (wrangler 4) and CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID in the environment - never commit them.
+# The proxy Worker in proxy/ is a different thing (Worker "satpass-proxy", its own wrangler.toml).
+name = "satpass"
+compatibility_date = "2026-09-01"
+pages_build_output_dir = "./dist"

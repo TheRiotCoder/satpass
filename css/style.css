@@ -49,6 +49,7 @@ select.inp{appearance:auto}
 .install .it span{color:var(--muted)}
 .update{background:var(--acc2);color:#fff;padding:8px 12px;display:flex;justify-content:center;align-items:center;gap:10px}
 .update[hidden],.nextbar[hidden]{display:none}
+.moved{background:#7a4b00;flex-wrap:wrap;text-align:center;font-size:.92em}.moved a{color:#fff;font-weight:700;text-decoration:underline}
 .toast{position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:999px;z-index:30;opacity:0;transition:opacity .2s;max-width:92vw;text-align:center}
 .toast.show{opacity:1}
 .nextbar{display:block;background:var(--card);border-bottom:1px solid var(--line);padding:8px 14px;font-size:.92rem;text-align:center;cursor:pointer;font-variant-numeric:tabular-nums}

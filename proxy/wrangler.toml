@@ -5,4 +5,4 @@ compatibility_date = "2024-09-01"
 
 [vars]
 # Browser origins allowed to call this proxy (comma separated, exact match, no trailing slash).
-ALLOWED_ORIGINS = "https://theriotcoder.github.io"
+ALLOWED_ORIGINS = "https://satpass-3wj.pages.dev,https://theriotcoder.github.io"
