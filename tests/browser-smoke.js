@@ -28,6 +28,7 @@ function check(name, ok, info) { results.push(ok); console.log((ok ? 'PASS ' : '
 const setVal = (sel, v) => `(() => { const e=document.querySelector(${JSON.stringify(sel)}); e.value=${JSON.stringify(v)}; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); })()`;
 const shot = async (name, full) => fs.writeFileSync(`${SHOTS}/${name}.png`, Buffer.from((await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !!full })).data, 'base64'));
 const reloadAt = async h => { await ev(`history.replaceState(null, '', ${JSON.stringify(h)})`); const l = waitEvent('Page.loadEventFired'); await send('Page.reload', {}); await l; };
+const waitFor0 = async (expr, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await ev(expr).catch(() => false)) return true; await sleep(250); } return false; };
 const go = async h => { await ev(`location.hash=${JSON.stringify(h)}`); await sleep(500); };
 const noOverflow = () => ev('document.documentElement.scrollWidth <= window.innerWidth + 1');
 // how many pixels of a canvas differ from its top-left pixel (proves something was drawn)
@@ -324,7 +325,8 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   // deep link to a lazily loaded satellite after a fresh page load
   await ev(`localStorage.setItem('satpass:dopSat', '25544')`); await go('#/passes');
   await reloadAt('#/live/60182'); await sleep(2500);
-  check('deep link to ALOS-4 (lazy SAR snapshot) opens the live tracker for it', await ev(`/ALOS-4/.test(document.querySelector('#liveSel').selectedOptions[0].textContent)`), await ev(`document.querySelector('#liveSel') && document.querySelector('#liveSel').selectedOptions[0].textContent`));
+  await waitFor0(`!!document.querySelector('#liveSel')`, 8000);   // (a cold CDN/first load can take longer than the fixed sleep above)
+  check('deep link to ALOS-4 (lazy SAR snapshot) opens the live tracker for it', await ev(`!!document.querySelector('#liveSel') && /ALOS-4/.test(document.querySelector('#liveSel').selectedOptions[0].textContent)`), await ev(`document.querySelector('#liveSel') ? document.querySelector('#liveSel').selectedOptions[0].textContent : 'NO liveSel; hash=' + location.hash + '; main=' + (document.querySelector('main') || document.body).innerText.slice(0, 300)`));
 
   // v1.0.1 localStorage migration (settings without schema, old view modes, cached TLEs) -> kept, normalised
   const keep = await ev(`JSON.stringify({ s: localStorage.getItem('satpass:settings'), m: localStorage.getItem('satpass:satMode') })`);

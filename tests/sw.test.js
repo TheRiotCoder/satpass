@@ -30,7 +30,7 @@ const normal = fire(B + "css/style.css");
 ok("SW still serves ordinary same-origin assets (cache-first)", normal.responded === true);
 const nav = fire(B, {}, "GET", "navigate");
 ok("SW still handles navigations (offline shell)", nav.responded === true);
-ok("VERSION constant is satpass-v1.3.4", /const VERSION = "satpass-v1\.3\.4"/.test(src));
+ok("VERSION constant is satpass-v1.3.5", /const VERSION = "satpass-v1\.3\.5"/.test(src));
 
 // ---------- 1.2.1: cache-consistent per version (no overwrite from the network after install), update wiring
 (async () => {
@@ -56,6 +56,18 @@ ok("VERSION constant is satpass-v1.3.4", /const VERSION = "satpass-v1\.3\.4"/.te
   ok("app: reg.update() runs when the app becomes visible again and about hourly", /visibilitychange[^}]*check\(\)/.test(app) && /setInterval\(check, 3600e3\)/.test(app) && /reg\.update\(\)/.test(app));
   ok("app: the update button posts skipWaiting to the waiting worker and sw.js honours it", /w\.postMessage\("skipWaiting"\)/.test(app) && /event\.data === "skipWaiting"\) self\.skipWaiting\(\)/.test(src));
   ok("app: malformed hash escapes cannot abort boot (safeDecode)", /function safeDecode/.test(app) && !/\.map\(decodeURIComponent\)/.test(app));
+  // ---------- 1.3.5: a host that redirects /index.html -> / (Cloudflare Pages) must not leave a redirected response in the shell cache or serve one to a navigation
+  {
+    const store2 = {}, mk = (body, redirected) => { const r = new Response(body, { status: 200, headers: { "content-type": "text/html" } }); Object.defineProperty(r, "redirected", { value: !!redirected }); return r; };
+    const L2 = {}, sw2 = { location: { origin: "https://satpass-3wj.pages.dev" }, addEventListener: (t, f) => { L2[t] = f; }, registration: { active: null }, clients: { claim() {} }, skipWaiting() {} };
+    const RQ = function (u, o) { return new Request(new URL(u, "https://satpass-3wj.pages.dev/sw.js").href, o); }, c2 = { self: sw2, Response, Request: RQ, Headers, URL, Promise, Error, fetch: async (req) => mk("<html>" + (req.url || req) + "</html>", /index\.html$/.test(req.url || String(req))), caches: { open: async () => ({ put: async (k, r) => { store2[k] = r; } }), match: async (k) => store2[typeof k === "string" ? k : k.url], keys: async () => [] } };
+    vm.createContext(c2); vm.runInContext(src, c2);
+    let inst; L2.install({ waitUntil: (p) => { inst = p; } }); await inst;
+    ok("1.3.5 install precaches the whole shell and none of the cached responses is a redirected one (index.html is redirected on Pages)", Object.keys(store2).length > 20 && Object.values(store2).every((r) => r.redirected === false) && /index\.html/.test(Object.keys(store2).join()));
+    store2["index.html"] = mk("<html>old</html>", true);   // an entry cached by 1.3.4 is rebuilt before it is served
+    let served; L2.fetch({ request: { url: "https://satpass-3wj.pages.dev/", method: "GET", mode: "navigate", headers: new Headers() }, respondWith: (p) => { served = p; }, waitUntil() {} }); served = await served;
+    ok("1.3.5 a navigation is never answered with a redirected response (body preserved)", served.redirected === false && (await served.text()) === "<html>old</html>" && served.status === 200);
+  }
   done();
 })();
 

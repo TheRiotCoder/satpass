@@ -167,6 +167,7 @@ Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry,
 
 ## Release notes
 
+- **1.3.5** – Service-worker fix for hosts that redirect `/index.html` → `/` (Cloudflare Pages): navigations after the first visit failed with a browser error page; the shell is now always cached/served as a plain response.
 - **1.3.4** – Own origin: served from Cloudflare Pages `https://satpass-3wj.pages.dev` (headers file, build script, redeploy docs, proxy origin), GitHub Pages is a deprecated mirror with a notice banner.
 - **1.3.3** – Concurrency/rotation fixes: all vault operations (save, passphrase change, unlock, biometric, lock) run through one queue and the lock waits for them (no more all-zero-key vaults or unopenable vaults from lock races); a passphrase change now rotates the data key and switches biometric off (re-enrol); hosting wording corrected (a GitHub Pages custom domain is still a shared origin). See `CHANGELOG.md`.
 - **1.3.2** – Security recheck of the biometric unlock: not offered (and records deleted) on shared `github.io` origins; vault now encrypts under a random data key (passphrase and PRF each wrap the key; the passphrase is never wrapped), legacy blobs migrate on unlock; padded wrap, header-authenticated backups, confirm before a backup import overwrites anything, non-discoverable passkey, clearer Reset (see `CHANGELOG.md`).

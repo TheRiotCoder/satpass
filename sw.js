@@ -1,6 +1,6 @@
 /* SatPass service worker (adapted from rf-toolbox) – offline app shell.
    VERSION is the single version string for the app (the About page reads it from the cache name). Bump it on every release. */
-const VERSION = "satpass-v1.3.4";
+const VERSION = "satpass-v1.3.5";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/style.css",
   "js/vendor/satellite.min.js", "js/grid.js", "js/doppler.js", "js/format.js", "js/tle.js", "js/passes.js", "js/ics.js", "js/radio.js", "js/catalog.js", "js/sources.js",
@@ -10,8 +10,13 @@ const SHELL = [
   "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png", "icons/apple-touch-icon.png", "icons/favicon-32.png"
 ];
 
+// A host that redirects /index.html -> / (Cloudflare Pages "clean URLs") answers the install fetch with a REDIRECTED response. Chrome refuses to serve a redirected
+// response to a navigation ("a redirected response was used for a request whose redirect mode is not follow") and the page then fails with a browser error page.
+// So every cached/served shell response is rebuilt as a plain (non-redirected) Response.
+function plain(res) { return res && res.redirected ? res.blob().then((b) => new Response(b, { status: 200, statusText: "OK", headers: res.headers })) : Promise.resolve(res); }
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })))));
+  event.waitUntil(caches.open(VERSION).then((c) => Promise.all(SHELL.map((u) =>
+    fetch(new Request(u, { cache: "reload" })).then((r) => { if (!r.ok) throw new Error("precache " + u + " " + r.status); return plain(r); }).then((r) => c.put(u, r))))));
   if (!self.registration.active) self.skipWaiting(); // first install takes over immediately; updates wait for the user
 });
 self.addEventListener("activate", (event) => {
@@ -23,7 +28,7 @@ self.addEventListener("message", (event) => { if (event.data === "skipWaiting") 
 
 // Only the active worker refreshes the cache, so a waiting (newer) worker's cache isn't mixed with old files and vice versa.
 function isActiveWorker() { return self.registration.active === self.serviceWorker || !self.serviceWorker; }
-function cachedShell() { return caches.match("index.html").then((r) => r || caches.match("./")); }
+function cachedShell() { return caches.match("index.html").then((r) => r || caches.match("./")).then(plain); }
 
 // Data-source requests (CelesTrak, Space-Track, SatNOGS, N2YO, the user's proxy) and anything carrying a credential are NEVER touched by the worker:
 // no respondWith, no cache read or write. (N2YO keys can appear in a URL query, others travel in headers.)
@@ -47,7 +52,7 @@ self.addEventListener("fetch", (event) => {
   const wantsShell = req.mode === "navigate";
   event.respondWith(
     (wantsShell ? cachedShell() : caches.match(req, { ignoreSearch: true })).then((cached) => {
-      if (cached) return cached;
+      if (cached) return plain(cached);
       return fetch(req).then((res) => {
         if (res && res.ok && !wantsShell && isActiveWorker()) { const copy = res.clone(); event.waitUntil(caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {})); }
         return res;

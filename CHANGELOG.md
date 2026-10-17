@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.5 – service worker vs. redirecting hosts (fix for the new Cloudflare Pages origin)
+- **Bug (found by the live smoke on the new origin):** Cloudflare Pages answers `/index.html` with a 308 redirect to `/`. The service worker pre-cached that **redirected** response and served it to navigations, which Chrome refuses ("a redirected response was used for a request whose redirect mode is not follow"): after the first visit every navigation/reload showed a browser error page. 1.3.4 on Pages was affected; GitHub Pages is not (no redirect).
+- **Fix:** every shell response is rebuilt as a plain (non-redirected) `Response` when precaching and again before it is served (so entries cached by 1.3.4 heal themselves on the next load). Pre-caching now fetches each file itself (`cache: "reload"`, all must be OK, same all-or-nothing install as before). Regression tests with a redirecting host; the live smoke now also checks a real navigation under an active service worker. No other change.
+
 ## 1.3.4 – own origin on Cloudflare Pages
 - SatPass is now served from **https://satpass-3wj.pages.dev** (Cloudflare Pages project `satpass`): its own origin, so biometric unlock is offered there (`sharedOrigin()` is false on `*.pages.dev`; verified live with the virtual authenticator). GitHub Pages stays as a deprecated mirror.
 - Repo: `public/_headers` (real CSP identical to the meta CSP + `frame-ancestors 'none'`, nosniff, no-referrer, X-Frame-Options, COOP, HSTS, Permissions-Policy, no-cache for the shell, Pages' default `Access-Control-Allow-Origin: *` removed), `tools/build-site.sh` (dist/ with only the app files + a real 404), `wrangler.toml` (Pages config). README: new primary URL, redeploy steps, optional Git auto-deploy, token hygiene. Proxy `ALLOWED_ORIGINS` now lists the new origin (redeploy the proxy if you already deployed it).

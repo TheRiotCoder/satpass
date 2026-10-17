@@ -184,6 +184,11 @@ module.exports = async function run(h) {
   if (!LOCAL && !SHARED_HOST) {
     const hd = await ev(`fetch(location.href).then(r => ({ csp: r.headers.get('content-security-policy') || '', xcto: r.headers.get('x-content-type-options'), rp: r.headers.get('referrer-policy'), xfo: r.headers.get('x-frame-options'), acao: r.headers.get('access-control-allow-origin'), pp: r.headers.get('permissions-policy') || '', coop: r.headers.get('cross-origin-opener-policy') }))`);
     check("1.3.4 (live host): real CSP header incl. frame-ancestors 'none', nosniff, no-referrer, DENY, COOP, Permissions-Policy; no ACAO *", /script-src 'self'/.test(hd.csp) && /frame-ancestors 'none'/.test(hd.csp) && /connect-src 'self' https:\/\/celestrak\.org https:\/\/\*\.workers\.dev/.test(hd.csp) && hd.xcto === "nosniff" && hd.rp === "no-referrer" && hd.xfo === "DENY" && hd.coop === "same-origin" && /publickey-credentials-get=\(self\)/.test(hd.pp) && !hd.acao, JSON.stringify(hd));
+    await nav(APP + "?navcheck=1"); await sleep(1500);
+    check("1.3.5 (live host): a real navigation / reload under the active service worker renders the app (no redirected-response error page, e.g. Pages' /index.html -> / redirect)", await ev(`!!document.querySelector('#title') && location.protocol === 'https:' && !!navigator.serviceWorker.controller`), await ev(`location.href`));
+    await send("Page.reload", {}); await sleep(2500);
+    check("1.3.5 (live host): …and so does a plain reload", await ev(`!!document.querySelector('#title') && location.search === '?navcheck=1'`), await ev(`location.href`));
+    await nav(APP);
     const sw = await ev(`navigator.serviceWorker.getRegistration().then(r => r ? { scope: r.scope, active: !!r.active } : null)`);
     check("1.3.4 (live host): the service worker is registered with scope = the origin root", !!sw && sw.scope === new URL(APP).origin + "/" && sw.active, JSON.stringify(sw));
     check("1.3.4 (live host): sharedOrigin() is false here and biometric enrolment is allowed by the store", await ev(`SatSources.sharedOrigin(location.hostname) === false && SatStore.sources.bioAllowed() === true`));
