@@ -1,1 +1,1 @@
-{ "name": "satpass-proxy", "version": "1.3.11", "private": true, "type": "module", "description": "Optional CORS proxy for SatPass (Space-Track, SatNOGS DB, N2YO). Deploy it to your own Cloudflare account." }
+{ "name": "satpass-proxy", "version": "1.3.13", "private": true, "type": "module", "description": "Optional CORS proxy for SatPass (Space-Track, SatNOGS DB, N2YO). Deploy it to your own Cloudflare account." }

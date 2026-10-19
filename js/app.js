@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.3.11";
+  var DAY = 86400000, APP_VERSION = "1.3.13";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -668,6 +668,19 @@
       return Object.assign({}, b, { selected: b.id === selected });
     });
   }
+  function groundHtml(prefix) {
+    return '<div class="ground-view" id="' + prefix + '" role="group" aria-label="Sky seen from the observing point"></div><p class="note" id="' + prefix + 'Status" role="status"></p>' +
+      '<div class="ground-controls" role="group" aria-label="Look around the sky">' + ["N", "E", "S", "W", "Up"].map(function (d) { return '<button class="btn sm" type="button" id="' + prefix + d + '" aria-label="Look ' + (d === "Up" ? "overhead" : {N:"north",E:"east",S:"south",W:"west"}[d]) + '">' + d + '</button>'; }).join("") +
+      '<button class="btn sm" type="button" id="' + prefix + 'Find">Find selected</button><button class="btn sm" type="button" id="' + prefix + 'In" aria-label="Zoom sky in">+</button><button class="btn sm" type="button" id="' + prefix + 'Out" aria-label="Zoom sky out">−</button><button class="btn sm" type="button" id="' + prefix + 'Reset">Reset view</button></div>' +
+      '<p class="note">Drag to look around · scroll or pinch to zoom · tap an object to identify it. Keyboard: arrows look, +/− zoom, Home faces north. Bearings use true north. Tree silhouettes and sky colors are decorative. Compass marks show the true, level horizon; actual terrain, clouds, other stars and constellations are not modeled. Symbols are enlarged and remain visible in daylight for identification.</p>';
+  }
+  function bindGround(prefix, get) {
+    ["N", "E", "S", "W", "Up"].forEach(function (d, i) { $("#" + prefix + d).onclick = function () { var g = get(); if (g) g.look(i < 4 ? i * 90 : 0, i < 4 ? 20 : 90); }; });
+    $("#" + prefix + "Find").onclick = function () { var g = get(); if (g) g.find(); };
+    $("#" + prefix + "In").onclick = function () { var g = get(); if (g) g.zoom(1.2); };
+    $("#" + prefix + "Out").onclick = function () { var g = get(); if (g) g.zoom(1 / 1.2); };
+    $("#" + prefix + "Reset").onclick = function () { var g = get(); if (g) g.reset(); };
+  }
   ROUTES.live = function (a) {
     setTitle("Live tracker");
     var n = a[0] ? Number(a[0]) : (S.load("liveSat", 25544));
@@ -677,7 +690,7 @@
     main.innerHTML = '<div class="toolbar"><select class="inp" id="liveSel" aria-label="Satellite">' + satSelectHtml(n) + '</select><button class="btn" id="liveFav" aria-label="Toggle favorite"></button></div>' +
       (sat ? "" : '<div class="err">Couldn\'t initialise this satellite\'s orbit (decayed or bad elements).</div>') +
       '<section class="card"><div id="liveHead" class="note" style="margin-top:0"></div><div class="readout" id="liveRead"></div>' +
-      '<div class="live-view-tabs" role="tablist" aria-label="Tracker view"><button class="btn" type="button" role="tab" id="tab2d" aria-controls="panel2d" aria-selected="true">2D Map</button><button class="btn" type="button" role="tab" id="tab3d" aria-controls="panel3d" aria-selected="false" tabindex="-1">3D Globe</button><button class="btn" type="button" role="tab" id="tabsky" aria-controls="panelsky" aria-selected="false" tabindex="-1">Sky View</button></div>' +
+      '<div class="live-view-tabs" role="tablist" aria-label="Tracker view"><button class="btn" type="button" role="tab" id="tab2d" aria-controls="panel2d" aria-selected="true">2D Map</button><button class="btn" type="button" role="tab" id="tab3d" aria-controls="panel3d" aria-selected="false" tabindex="-1">3D Globe</button><button class="btn" type="button" role="tab" id="tabsky" aria-controls="panelsky" aria-selected="false" tabindex="-1">Sky View</button><button class="btn" type="button" role="tab" id="tabground" aria-controls="panelground" aria-selected="false" tabindex="-1">3D Sky</button></div>' +
       '<div id="panel2d" role="tabpanel" aria-labelledby="tab2d"><div class="canvaswrap"><canvas id="map" role="img" aria-label="World map with satellite position and ground track"></canvas></div>' +
       '<p class="note">Map: <span style="color:#f472b6">●</span> satellite, solid line = next 100 min ground track, dashed = last 50 min, ring = radio horizon (0° elevation), amber ring = your minimum elevation, <span style="color:#4ade80">▲</span> you.</p></div>' +
       '<div id="panel3d" role="tabpanel" aria-labelledby="tab3d" hidden><div class="canvaswrap"><canvas id="globe" class="globe" role="img" tabindex="0" aria-label="Interactive 3D Earth with satellite and orbit. Use arrow keys to rotate, plus and minus to zoom, Home to center on satellite." aria-describedby="globeHelp"></canvas></div>' +
@@ -686,18 +699,23 @@
       '<p class="note">Pink = satellite at actual altitude (marker enlarged); green = you. Cyan path: next 100 min solid, last 50 min dashed, in Earth-fixed coordinates. Surface rings: radio horizon and minimum elevation (amber). Earth hides objects on its far side. Globe shading is decorative.</p></div>' +
       '<div id="panelsky" role="tabpanel" aria-labelledby="tabsky" hidden><p class="banner" id="liveSkyLocation" hidden>Sky View needs your observing location. <a class="link" href="#/settings">Set your location in Setup</a>.</p><p class="note" id="liveSkyStatus">' + (sat ? "Waiting for satellite position…" : "No valid orbital position is available for this satellite.") + '</p>' +
       '<div class="canvaswrap" id="liveSkyChart"><canvas id="liveSkyCanvas" class="sky-chart" role="img" aria-label="Selected satellite in the sky from your saved location. North at top, east on left, overhead at center, horizon at rim." aria-describedby="liveSkyHelp liveSkyReadout liveSkyStatus"></canvas></div><p class="note" id="liveSkyReadout"></p>' +
-      '<p class="note" id="liveSkyHelp">Looking up: north at top, east on left. Center = overhead (90°); outer ring = horizon (0°). Hold the chart overhead with N toward true north. Pink = selected satellite. Dashed amber ring = your minimum elevation, when set. Other stars and constellations are not included.</p>' + celestialHtml("liveCelestial") + '</div>' +
+      '<p class="note" id="liveSkyHelp">Looking up: north at top, east on left. Center = overhead (90°); outer ring = horizon (0°). Hold the chart overhead with N toward true north. Pink = selected satellite. Dashed amber ring = your minimum elevation, when set. Other stars and constellations are not included.</p></div>' +
+      '<div id="panelground" role="tabpanel" aria-labelledby="tabground" hidden>' + groundHtml("liveGround") + '<p class="note" id="liveGroundSelection"></p></div><div id="liveSkyReferences" hidden>' + celestialHtml("liveCelestial") + '</div>' +
       '<div id="liveNext"></div><div class="actions"><a class="btn" href="#/passes/' + n + '">Passes for this satellite</a>' + (R.radios(n).length ? '<a class="btn" href="#/doppler/' + n + '">📻 Doppler</a>' : radarInfoOf(n) ? '<a class="btn" href="#/doppler/' + n + '">📡 Radar</a>' : "") + "</div></section>" +
       '<p class="disclaimer">Position from SGP4 using a TLE ' + (entry(n) ? F.age(Date.now() - entry(n).epochMs) : "?") + ' old. Not for navigation.</p>';
     $("#liveSel").onchange = function () { go("#/live/" + this.value); };
     var fb = $("#liveFav"); function favState() { fb.textContent = S.isFav(n) ? "★ Favorite" : "☆ Favorite"; }
     fb.onclick = function () { S.toggleFav(n); favState(); refreshNextBar(); }; favState();
-    var modes = ["2d", "3d", "sky"], mode = S.load("liveView", "2d"), globe = null, celestialSelected = null, liveSkyData = null;
+    var modes = ["2d", "3d", "sky", "ground"], mode = S.load("liveView", "2d"), globe = null, ground = null, celestialSelected = null, liveSkyData = null;
     if (modes.indexOf(mode) < 0) mode = "2d";
     function selectView(next, focus) {
       mode = next; S.save("liveView", mode);
       modes.forEach(function (id) { var active = id === mode, tab = $("#tab" + id); tab.setAttribute("aria-selected", String(active)); tab.tabIndex = active ? 0 : -1; $("#panel" + id).hidden = !active; });
       if (mode !== "3d" && globe) globe.suspend();
+      if (mode !== "ground" && ground) ground.suspend();
+      $("#liveSkyReferences").hidden = mode !== "sky" && mode !== "ground";
+      $("#liveGround").hidden = !sat || !S.hasLocation();
+      if (!sat || !S.hasLocation()) $("#liveGroundStatus").innerHTML = !sat ? "No valid orbital position is available for this satellite." : 'Set your observing location in <a class="link" href="#/settings">Setup</a> to use 3D Sky.';
       if (sat) tick();
       if (focus) $("#tab" + mode).focus();
     }
@@ -721,7 +739,8 @@
       var hit = window.SatSky.pick(liveSkyData.hits, (e.clientX - rect.left) * liveSkyData.size / rect.width, (e.clientY - rect.top) * liveSkyData.size / rect.height);
       if (hit) { celestialSelected = hit.kind === "satellite" ? null : hit.id; tick(); }
     };
-    view.dispose = function () { if (globe) globe.dispose(); };
+    bindGround("liveGround", function () { return ground; });
+    view.dispose = function () { if (globe) globe.dispose(); if (ground) ground.dispose(); };
     if (!sat) { $("#liveSkyChart").hidden = true; selectView(mode); return; }
     var obs = S.hasLocation() ? observer() : null, canvas = $("#map"), trackAt = 0, tr = null, nextTxt = "";
     $("#liveSkyLocation").hidden = !!obs;
@@ -737,7 +756,10 @@
       if (!s) {
         $("#liveRead").innerHTML = '<div class="err">SGP4 could not propagate this satellite now.</div>';
         $("#liveSkyStatus").textContent = "No valid orbital position is available for this satellite now.";
-        $("#liveSkyReadout").textContent = ""; $("#liveSkyChart").hidden = true; return;
+        $("#liveSkyReadout").textContent = ""; $("#liveSkyChart").hidden = true;
+        $("#liveGroundStatus").textContent = "No valid orbital position is available for this satellite now.";
+        $("#liveGroundSelection").textContent = ""; $("#liveGround").hidden = true;
+        if (ground) ground.suspend(); return;
       }
       if (now - trackAt > 60000 || !tr) loadTrack(now);
       var up = s.el > 0;
@@ -748,13 +770,22 @@
       var fp0 = P.footprintAngleDeg(s.altKm, 0), fpm = obs ? P.footprintAngleDeg(s.altKm, S.settings.minEl) : 0;
       var drawing = { sat: s, label: nameOf(n), track: tr, obs: obs ? { lat: S.settings.lat, lon: S.settings.lon } : null, footprint0: fp0, footprintMin: S.settings.minEl > 0 ? fpm : 0 };
       if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#globe")); globe.update(drawing, $("#panel3d").clientWidth || contentWidth()); }
-      else if (mode === "sky") {
+      else if (mode === "sky" || mode === "ground") {
         $("#liveSkyChart").hidden = !obs;
+        $("#liveGround").hidden = !obs;
         if (obs) {
           var bodies = renderCelestial("liveCelestial", { lat: S.settings.lat, lon: S.settings.lon, alt: S.settings.alt || 0 }, now, celestialSelected);
-          liveSkyData = window.SatSky.draw($("#liveSkyCanvas"), $("#panelsky").clientWidth || contentWidth(), [{ id: n, name: nameOf(n), az: s.az, el: s.el, selected: true }].concat(bodies), { minEl: S.settings.minEl });
+          var skyItems = [{ id: n, name: nameOf(n), az: s.az, el: s.el, selected: true }].concat(bodies);
+          if (mode === "ground") {
+            if (!ground) ground = window.SatGround.create($("#liveGround"), function (hit) { celestialSelected = hit.kind === "satellite" || !hit.kind ? null : hit.id; tick(); });
+            ground.update(skyItems, { minEl: S.settings.minEl, sunEl: s.sunEl, labels: true, centerSelected: true });
+          } else liveSkyData = window.SatSky.draw($("#liveSkyCanvas"), $("#panelsky").clientWidth || contentWidth(), skyItems, { minEl: S.settings.minEl });
           $("#liveSkyStatus").textContent = s.el < 0 ? "Below your horizon (" + fmt(s.el, 1) + "°). The satellite will appear on the chart when it rises." : s.el < S.settings.minEl ? "Above the horizon, below your " + S.settings.minEl + "° minimum elevation setting." : "Above your horizon. Position updates every second.";
           $("#liveSkyReadout").textContent = nameOf(n) + " · Bearing " + az(s.az) + " · Elevation " + fmt(s.el, 1) + "° · Range " + Math.round(s.rangeKm).toLocaleString("en-US") + " km · " + window.SatVisible.conditions(s);
+          $("#liveGroundStatus").textContent = $("#liveSkyStatus").textContent.replace("chart", "sky");
+          var bodyPick = bodies.filter(function (b) { return b.id === celestialSelected; })[0];
+          $("#liveGroundSelection").textContent = bodyPick ? bodyPick.name + " · " + celestialReadout(bodyPick) : $("#liveSkyReadout").textContent;
+          $("#liveGroundFind").disabled = s.el < 0 && !bodyPick;
         } else { liveSkyData = null; renderCelestial("liveCelestial", null, now, celestialSelected); }
       }
       else Dr.worldmap(canvas, contentWidth(), drawing);
@@ -774,7 +805,7 @@
     if (!V.validPoint(custom)) custom = null;
     var saved = S.hasLocation() ? { lat: S.settings.lat, lon: S.settings.lon, alt: S.settings.alt || 0 } : null;
     var point = custom || saved, initial = point || { lat: "", lon: "", alt: 0 };
-    var modes = ["2d", "3d", "sky"], mode = S.load("visibleView", "2d"), globe = null, selected = null, rowNodes = {}, skyChart = null, celestialSelected = null, token = view.token;
+    var modes = ["2d", "3d", "sky", "ground"], mode = S.load("visibleView", "2d"), globe = null, ground = null, selected = null, rowNodes = {}, skyChart = null, celestialSelected = null, token = view.token;
     if (modes.indexOf(mode) < 0) mode = "2d";
     var minEl = Number(S.load("visibleMinEl", 0)); if ([0, 10, 20, 30, 45, 60].indexOf(minEl) < 0) minEl = 0;
     var dir = S.load("visibleDirection", "all"); if (V.DIRECTIONS.indexOf(dir) < 0) dir = "all";
@@ -790,12 +821,13 @@
       '<div class="field"><label for="visibleDirection">Look toward</label><select class="inp" id="visibleDirection">' + ["all"].concat(V.DIRECTIONS).map(function (v) { return '<option value="' + v + '"' + (v === dir ? " selected" : "") + '>' + (v === "all" ? "All directions" : v) + '</option>'; }).join("") + '</select></div>' +
       '<div class="field"><label for="visibleOptical">Viewing conditions</label><select class="inp" id="visibleOptical"><option value="all">All above horizon</option><option value="optical"' + (S.load("visibleOptical", false) ? " selected" : "") + '>Sunlit + dark sky</option></select></div></div>' +
       '<p class="note"><b id="visibleCount" role="status"></b> · <span id="visibleClock"></span></p><p class="note" id="visibleSky"></p>' +
-      '<div class="live-view-tabs" role="tablist" aria-label="Visible satellite view"><button class="btn" type="button" role="tab" id="visibleTab2d" aria-controls="visiblePanel2d" aria-selected="true">2D Map</button><button class="btn" type="button" role="tab" id="visibleTab3d" aria-controls="visiblePanel3d" aria-selected="false" tabindex="-1">3D Globe</button><button class="btn" type="button" role="tab" id="visibleTabsky" aria-controls="visiblePanelsky" aria-selected="false" tabindex="-1">Sky View</button></div>' +
+      '<div class="live-view-tabs" role="tablist" aria-label="Visible satellite view"><button class="btn" type="button" role="tab" id="visibleTab2d" aria-controls="visiblePanel2d" aria-selected="true">2D Map</button><button class="btn" type="button" role="tab" id="visibleTab3d" aria-controls="visiblePanel3d" aria-selected="false" tabindex="-1">3D Globe</button><button class="btn" type="button" role="tab" id="visibleTabsky" aria-controls="visiblePanelsky" aria-selected="false" tabindex="-1">Sky View</button><button class="btn" type="button" role="tab" id="visibleTabground" aria-controls="visiblePanelground" aria-selected="false" tabindex="-1">3D Sky</button></div>' +
       '<div id="visiblePanel2d" role="tabpanel" aria-labelledby="visibleTab2d"><div class="canvaswrap"><canvas id="visibleMap" role="img" aria-label="World map of all satellites above the observing point"></canvas></div></div>' +
       '<div id="visiblePanel3d" role="tabpanel" aria-labelledby="visibleTab3d" hidden><div class="canvaswrap"><canvas id="visibleGlobe" class="globe" role="img" tabindex="0" aria-label="Globe of satellites above the observing point. Arrow keys rotate; plus and minus zoom; Home centers on You." aria-describedby="visibleGlobeHelp"></canvas></div>' +
       '<div class="actions"><button class="btn sm" type="button" id="visibleCenter">Center on You</button><button class="btn sm" type="button" id="visibleZoomIn" aria-label="Zoom in">+</button><button class="btn sm" type="button" id="visibleZoomOut" aria-label="Zoom out">−</button></div><label class="check"><input type="checkbox" id="visibleTrueScale"> Use actual altitude scale</label><p class="note" id="visibleGlobeHelp">Drag to rotate · scroll or pinch to zoom. Arrows rotate; +/− zoom; Home centers on You. Satellite heights are compressed by default to keep Earth readable; bearing, elevation and range use actual positions. Shading is decorative.</p></div>' +
       '<div id="visiblePanelsky" role="tabpanel" aria-labelledby="visibleTabsky" hidden><div class="canvaswrap"><canvas id="visibleSkyMap" class="sky-chart" role="img" aria-label="Whole sky from your observing point. North at top, east on left, overhead at center, horizon at rim. Satellite names and readouts are also available in the list below." aria-describedby="visibleSkyHelp visibleSkySelection"></canvas></div>' +
-      '<p class="note" id="visibleSkyHelp">Looking up: north at top, east on left. Center = overhead (90°); outer ring = horizon (0°). Hold the chart overhead with N toward true north. Dashed amber ring = minimum elevation, when set. Other stars and constellations are not included.</p><p class="note" id="visibleSkySelection">Tap a marker or choose a satellite in the list below for its name and readouts.</p>' + celestialHtml("visibleCelestial") + '</div>' +
+      '<p class="note" id="visibleSkyHelp">Looking up: north at top, east on left. Center = overhead (90°); outer ring = horizon (0°). Hold the chart overhead with N toward true north. Dashed amber ring = minimum elevation, when set. Other stars and constellations are not included.</p><p class="note" id="visibleSkySelection">Tap a marker or choose a satellite in the list below for its name and readouts.</p></div>' +
+      '<div id="visiblePanelground" role="tabpanel" aria-labelledby="visibleTabground" hidden>' + groundHtml("visibleGround") + '<p class="note" id="visibleGroundSelection"></p></div><div id="visibleSkyReferences" hidden>' + celestialHtml("visibleCelestial") + '</div>' +
       '<label class="check"><input type="checkbox" id="visibleLabels"> Show satellite names in all views</label>' +
       '<p class="note" id="visibleLegend"></p></section>' +
       '<section class="card"><h2>Above your horizon</h2><p class="note">Highest elevation first. Bearings are degrees clockwise from <b>true north</b>; a magnetic compass may differ. Elevation: 0° at the horizon, 90° directly overhead.</p>' +
@@ -811,6 +843,7 @@
       point = next; custom = isCustom ? next : null; S.save("visiblePoint", custom);
       obs = P.makeObserver(point.lat, point.lon, point.alt); selected = null; celestialSelected = null;
       if (globe) { globe.dispose(); globe = null; }
+      if (ground) { ground.dispose(); ground = null; }
       updateObserver(); tick();
     }
     $("#visiblePointForm").onsubmit = function (e) {
@@ -825,7 +858,9 @@
       mode = next; S.save("visibleView", mode);
       modes.forEach(function (id) { var active = mode === id, tab = $("#visibleTab" + id); tab.setAttribute("aria-selected", String(active)); tab.tabIndex = active ? 0 : -1; $("#visiblePanel" + id).hidden = !active; });
       if (mode !== "3d" && globe) globe.suspend();
-      $("#visibleLegend").textContent = (mode === "sky" ? "You are at the observing point, looking up. " : "▲ Green = You (the observing point). ") + "Gold = sunlit in a dark sky; cyan = other satellites; pink = selected. Choose a satellite below to label it in any view.";
+      if (mode !== "ground" && ground) ground.suspend();
+      $("#visibleSkyReferences").hidden = mode !== "sky" && mode !== "ground";
+      $("#visibleLegend").textContent = (mode === "sky" || mode === "ground" ? "You are at the observing point, looking up. " : "▲ Green = You (the observing point). ") + "Gold = sunlit in a dark sky; cyan = other satellites; pink = selected. Choose a satellite below to label it in any view.";
       tick(); if (focus) $("#visibleTab" + mode).focus();
     }
     modes.forEach(function (id) {
@@ -896,18 +931,26 @@
       }), sat: pick ? pick.state : null, label: pick ? nameOf(pick.norad) : "" };
       var panel = $("#visiblePanel" + mode), w = panel.clientWidth || contentWidth();
       if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#visibleGlobe")); globe.update(drawing, w); }
-      else if (mode === "sky") {
+      else if (mode === "sky" || mode === "ground") {
         var bodies = renderCelestial("visibleCelestial", point, now, celestialSelected);
-        skyChart = window.SatSky.draw($("#visibleSkyMap"), w, rows.map(function (r) {
+        var skyItems = rows.map(function (r) {
           return { id: r.norad, name: nameOf(r.norad), az: r.state.az, el: r.state.el, selected: r.norad === selected, color: r.state.sunlit && r.state.sunEl < P.VISIBLE_SUN_EL ? "#fbbf24" : "#22d3ee" };
-        }).concat(bodies), { minEl: options.minEl, labels: showLabels });
+        }).concat(bodies);
+        if (mode === "ground") {
+          if (!ground) ground = window.SatGround.create($("#visibleGround"), function (hit) { if (hit.kind === "satellite" || !hit.kind) { selected = hit.id; celestialSelected = null; } else celestialSelected = hit.id; tick(); });
+          ground.update(skyItems, { minEl: options.minEl, labels: showLabels, sunEl: sunEl });
+        } else skyChart = window.SatSky.draw($("#visibleSkyMap"), w, skyItems, { minEl: options.minEl, labels: showLabels });
         var bodyPick = bodies.filter(function (b) { return b.id === celestialSelected; })[0];
         $("#visibleSkySelection").textContent = bodyPick ? bodyPick.name + " · " + celestialReadout(bodyPick) : pick ? nameOf(pick.norad) + " · Bearing " + az(pick.state.az) + " · Elevation " + fmt(pick.state.el, 1) + "° · Range " + Math.round(pick.state.rangeKm).toLocaleString("en-US") + " km · " + V.conditions(pick.state) : "Tap a marker or choose a satellite in the list below for its name and readouts.";
+        $("#visibleGroundSelection").textContent = $("#visibleSkySelection").textContent;
+        $("#visibleGroundFind").disabled = !bodyPick && !pick;
+        $("#visibleGroundStatus").textContent = rows.length + " satellites above the horizon match your filters. Turn to look in any direction.";
       }
       else Dr.worldmap($("#visibleMap"), w, drawing);
       $("#visibleCatalog").textContent = result.total + " catalog satellites checked" + (result.skipped ? " · " + result.skipped + " with unusable orbital positions skipped" : "") + ". " + (S.allLoaded() ? "Includes all catalog categories and your imports/lookups." : "Some catalog categories are still loading or unavailable; results may be incomplete.");
     }
-    view.dispose = function () { if (globe) globe.dispose(); };
+    bindGround("visibleGround", function () { return ground; });
+    view.dispose = function () { if (globe) globe.dispose(); if (ground) ground.dispose(); };
     view.tick = tick; view.resize = tick; updateObserver(); chooseMode(mode); every(1000, tick);
     if (!S.allLoaded()) S.ensureAll().then(function () { if (token === view.token) tick(); });
   };
@@ -1200,6 +1243,7 @@
       "<p><b>Accuracy:</b> orbits come from public two-line element sets (TLEs) propagated with SGP4/SDP4 (<a class='link' href='https://github.com/shashwatak/satellite-js' target='_blank' rel='noopener'>satellite.js</a>, MIT). A fresh LEO TLE is good to roughly a kilometre or two, which is a few seconds of timing; the error grows every day (ISS: up to ~10 km/day after reboosts or manoeuvres). Element sets older than " + Tle.STALE_DAYS + " days are flagged. Always confirm important passes with a live source.</p>" +
       "<p><b>Approximations:</b> (1) elevations are <i>geometric</i> – no atmospheric refraction (~0.5° at the horizon), so real AOS/LOS happen slightly earlier/later; (2) sunlit/eclipse uses a simple <i>cylindrical Earth shadow</i> (spherical Earth, no penumbra or atmosphere) – transitions are good to a few seconds; (3) a pass is flagged <i>visible</i> when the satellite is sunlit, above your horizon and the sun is below <b>−6°</b> (civil twilight) – a rule of thumb, since brightness, sky glow, weather and terrain also matter; only ISS/Tiangong get the tag. Sun position uses a low-precision formula (~0.01°).</p>" +
       "<p><b>Sky references:</b> Sky View uses locally bundled <a class='link' href='https://github.com/cosinekitty/astronomy' target='_blank' rel='noopener'>Astronomy Engine 2.1.19</a> by Don Cross (<a class='link' href='js/vendor/astronomy-LICENSE.md' target='_blank' rel='noopener'>MIT license</a>). Positions include the observing location and omit atmospheric refraction. Polaris uses bundled J2000 coordinates from SIMBAD with precession/nutation calculated locally. Above-horizon positions do not guarantee naked-eye visibility.</p>" +
+      "<p><b>3D Sky:</b> locally bundled <a class='link' href='https://github.com/mrdoob/three.js/tree/r180' target='_blank' rel='noopener'>Three.js 0.180.0</a> (<a class='link' href='js/vendor/three-LICENSE.txt' target='_blank' rel='noopener'>MIT license</a>) renders the sky from your observing point. Compass bearings use true north; horizon, sky colors and enlarged symbols are illustrative. Requires WebGL 2. The Sky View chart is available when 3D graphics are unsupported.</p>" +
       "<p><b>Long passes:</b> if a pass is already under way when computed, its true AOS is found by looking back (up to 24 h). A pass still open at the end of the window is followed until it ends (up to 14 h further); if it never ends within that limit it is marked <i>LOS ≥</i> (lower bound).</p>" +
       "<p><b>Frequencies</b> in the Doppler tab are approximate and change; verify with <a class='link' href='https://www.amsat.org/status/' target='_blank' rel='noopener'>AMSAT status</a>.</p>" +
       "<p><b>Categories &amp; SAR:</b> the Sats tab groups satellites into Amateur, Stations, Weather, SAR, Earth observation, Navigation and Science (CelesTrak groups; the SAR list is curated). For SAR satellites the Doppler tab shows the <i>nominal radar carrier</i> (band, centre frequency, bandwidth, polarizations) instead of up/downlinks. <b>These radar frequencies are nominal, informational only and not for reception</b>; values that could not be verified are shown as “not verified”. Sources: agency/operator documents, <a class='link' href='https://eoportal.org' target='_blank' rel='noopener'>ESA eoPortal</a> and <a class='link' href='https://space.oscar.wmo.int' target='_blank' rel='noopener'>WMO OSCAR</a>. The Doppler shown for radar is the <i>one-way carrier Doppler at your position</i>; real SAR processing uses the two-way Doppler centroid with antenna pointing. Starlink and OneWeb are not listed (look up a single one by name in the search box).</p>" +

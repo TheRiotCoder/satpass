@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.13 – 3D Sky horizon scenery
+- Adds two seamless layers of locally drawn tree silhouettes around the 3D Sky horizon on Live Tracker and Visible Now. Distant and nearby trees adapt their dark colors to the illustrative day/night sky, helping distinguish ground from sky.
+- Scenery rotates with the camera and works offline without additional assets or libraries. Compass marks still identify the true, level horizon; decorative trees do not alter visibility calculations or hide satellite/reference markers.
+
+## 1.3.12 – Interactive 3D Sky
+- Adds a fourth 3D Sky tab on Live Tracker and Visible Now, with an observer-centered perspective camera, 360° mouse/touch look, wheel/pinch/button zoom, keyboard controls, compass directions, overhead/reset controls and Find selected.
+- Reuses active-point satellite and astronomical positions, filters, selection/readouts and the Moon/planet/Polaris toggle. Draws only above-horizon objects; symbols are enlarged for identification, including in daylight. A level horizon, elevation grid and optional minimum-elevation ring provide orientation. Sky colors are illustrative; no terrain, cloud, additional star catalog or device sensors.
+- Bundles pinned Three.js 0.180.0 under MIT, including its license and provenance. Lazy initialization, offline precaching, graceful WebGL 2 fallback, responsive layout, hidden-tab suspension and GPU/event cleanup keep the feature isolated from orbital calculations and existing views.
+
 ## 1.3.11 – Polaris sky reference
 - Adds “Polaris · North Star” to the shared reference layer in both Sky Views, with a lavender star marker, automatic label and selectable bearing/elevation readout. The renamed Moon/planets/Polaris toggle retains the existing preference.
 - Uses SIMBAD J2000 coordinates and parallax with Astronomy Engine’s user-defined star support, including date/observer transformations. Small proper motion is omitted; source and approximation are documented in README. Polaris is only drawn above the active observing point’s horizon and is not pinned to exact north. No additional library or runtime network request.

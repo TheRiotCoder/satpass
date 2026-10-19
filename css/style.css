@@ -88,7 +88,7 @@ select.inp{appearance:auto}
 .kv b{font-size:1.02rem}
 .kv .big b{font-size:1.4rem;color:var(--acc)}
 .canvaswrap{display:flex;justify-content:center;margin:8px 0}
-.live-view-tabs{display:flex;gap:6px;margin-top:14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+.live-view-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;border-bottom:1px solid var(--line);padding-bottom:8px}
 .live-view-tabs [aria-selected="true"]{color:var(--acc);border-color:var(--acc);background:var(--bg);font-weight:700}
 .live-view-tabs .btn:focus-visible,.globe:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
 .globe{display:block;max-width:100%;border-radius:10px;touch-action:none;cursor:grab}
@@ -97,6 +97,20 @@ select.inp{appearance:auto}
 #visibleResults[hidden],#visiblePanel2d[hidden],#visiblePanel3d[hidden],#visiblePanelsky[hidden],#visibleEmpty[hidden]{display:none}
 .live-view-tabs .btn{flex:1;padding:8px;font-size:.9rem;white-space:nowrap}
 .sky-chart{border-radius:10px;cursor:crosshair}
+.ground-view{position:relative;width:100%;height:clamp(340px,55vw,500px);overflow:hidden;border-radius:12px;background:#0a1524;margin:10px 0;color:#e2e8f0}
+.ground-view[hidden]{display:none}
+.ground-scene,.ground-overlay{position:absolute;inset:0;width:100%;height:100%;display:block}
+.ground-scene{touch-action:none;cursor:grab;outline-offset:-3px}
+.ground-scene.dragging{cursor:grabbing}
+.ground-scene:focus-visible{outline:2px solid #67e8f9}
+.ground-scene[hidden],.ground-overlay[hidden],.ground-hud[hidden]{display:none}
+.ground-overlay{pointer-events:none}
+.ground-hud{position:absolute;top:14px;left:14px;padding:9px 12px;border:1px solid #94b5c333;border-radius:8px;background:#071322b8;color:#cde1ed;font:12px/1.7 system-ui,sans-serif;white-space:pre-line;pointer-events:none}
+.ground-message{position:absolute;inset:0;display:grid;place-content:center;padding:24px;text-align:center;margin:0}
+.ground-message[hidden]{display:none}
+.ground-controls{display:flex;flex-wrap:wrap;gap:6px}
+.ground-controls .btn{min-width:44px;min-height:44px}
+@media(max-width:420px){.live-view-tabs .btn{flex-basis:calc(50% - 6px)}}
 .celestial-layer .check{display:flex;align-items:center;gap:8px;min-height:44px;font-size:.9rem}
 .celestial-layer input{width:18px;height:18px;flex-shrink:0}
 .celestial-readouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin-top:8px}

@@ -13,7 +13,7 @@ if (LOCAL) { // serve the repo under /satpass/ to mimic the GitHub Pages subpath
   fs.symlinkSync(path.join(__dirname, '..'), root + '/satpass');
   server = spawn('python3', ['-m', 'http.server', String(HTTP), '--bind', '127.0.0.1'], { cwd: root, stdio: 'ignore' });
 }
-const chrome = spawn('google-chrome', ['--headless=new', '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${PORT}`,
+const chrome = spawn(process.env.CHROME_BIN || 'google-chrome', ['--headless=new', '--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', `--remote-debugging-port=${PORT}`,
   '--user-data-dir=/tmp/chrome-satpass', '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
 const problems = [], consoleAll = []; let ws, nextId = 1; const pending = new Map(); const listeners = [];
 function send(method, params = {}) { const id = nextId++; ws.send(JSON.stringify({ id, method, params })); return new Promise((res, rej) => pending.set(id, { res, rej, method })); }
@@ -179,6 +179,12 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   check('live: Sky View persists across satellite changes', await ev(`document.querySelector('#tabsky').getAttribute('aria-selected')==='true' && document.querySelector('#liveSkyReadout').textContent.startsWith('ISS')`));
   await ev(`document.querySelector('#tabsky').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}))`);
   check('live: Home returns to map from Sky View', await ev(`document.activeElement.id==='tab2d' && !document.querySelector('#panel2d').hidden && document.querySelector('#panelsky').hidden`));
+  await ev(`document.querySelector('#tabground').click()`);
+  check('live: fourth tab renders observer-centered 3D Sky', await waitFor0(`document.querySelector('#liveGround .ground-message')?.hidden`, 15000));
+  await ev(`document.querySelector('#liveGroundE').click()`); await sleep(100);
+  check('live: compass looks east in 3D Sky', await ev(`document.querySelector('#liveGround .ground-hud').textContent.includes('LOOKING E · 90°')`));
+  check('live: 3D Sky fits mobile width', await noOverflow());
+  await shot('05-live-3d-sky');
 
   // ---- Visible Now: all catalog objects, saved/custom observer, filters and both views
   await go('#/visible'); await sleep(500);
@@ -203,9 +209,12 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   await ev(`document.querySelector('#visibleCelestialList .celestial-object')?.click()`);
   check('Visible Now: selecting a reference object preserves satellite selection identity', await ev(`!document.querySelector('#visibleCelestialList .celestial-object') || (document.querySelector('#visibleCelestialList [aria-pressed="true"]') && /Bearing.*Elevation/.test(document.querySelector('#visibleSkySelection').textContent))`));
   await ev(`document.querySelector('#visibleTabsky').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`);
-  check('Visible Now: keyboard cycles from third tab to first', await ev(`document.activeElement.id==='visibleTab2d' && !document.querySelector('#visiblePanel2d').hidden && document.querySelector('#visiblePanelsky').hidden`));
+  check('Visible Now: keyboard advances to fourth 3D Sky tab', await ev(`document.activeElement.id==='visibleTabground' && !document.querySelector('#visiblePanelground').hidden`));
+  check('Visible Now: 3D sky renderer initializes', await waitFor0(`document.querySelector('#visibleGround .ground-message')?.hidden`, 15000));
+  await ev(`document.querySelector('#visibleTabground').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`);
+  check('Visible Now: keyboard wraps fourth tab to first', await ev(`document.activeElement.id==='visibleTab2d' && !document.querySelector('#visiblePanel2d').hidden && document.querySelector('#visiblePanelground').hidden`));
   await ev(`document.querySelector('#visibleTab2d').dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}))`);
-  check('Visible Now: End selects Sky View and remembers it', await ev(`document.activeElement.id==='visibleTabsky' && SatStore.load('visibleView')==='sky'`));
+  check('Visible Now: End selects 3D Sky and remembers it', await ev(`document.activeElement.id==='visibleTabground' && SatStore.load('visibleView')==='ground'`));
   const savedPoint = await ev(`[SatStore.settings.lat,SatStore.settings.lon,SatStore.settings.alt]`);
   await ev(`document.querySelector('#visibleLocation').open=true`);
   await ev(setVal('#visibleLat', '-33.86')); await ev(setVal('#visibleLon', '151.21'));

@@ -14,7 +14,7 @@
    — or stored as Worker secrets (ST_IDENTITY, ST_PASSWORD, SATNOGS_TOKEN, N2YO_KEY), the recommended setup. Secrets are only used when PROXY_TOKEN
    is also set and the request carries it (X-SatPass-Proxy-Token), so strangers who find the URL cannot spend your quota.
    Nothing is logged; secrets are never put in response bodies or headers. */
-const VERSION = "1.3.11";
+const VERSION = "1.3.13";
 const UA = "SatPass-proxy/" + VERSION + " (+https://github.com/TheRiotCoder/satpass)";
 const ST = "https://www.space-track.org", SN = "https://db.satnogs.org/api", N2 = "https://api.n2yo.com/rest/v1/satellite";
 const TTL = { stgp: 3600, sntle: 3600, sntx: 21600, n2tle: 3600, n2pass: 1800 };
