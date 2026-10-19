@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.3.11 – Polaris sky reference
+- Adds “Polaris · North Star” to the shared reference layer in both Sky Views, with a lavender star marker, automatic label and selectable bearing/elevation readout. The renamed Moon/planets/Polaris toggle retains the existing preference.
+- Uses SIMBAD J2000 coordinates and parallax with Astronomy Engine’s user-defined star support, including date/observer transformations. Small proper motion is omitted; source and approximation are documented in README. Polaris is only drawn above the active observing point’s horizon and is not pinned to exact north. No additional library or runtime network request.
+
+## 1.3.10 – Moon and planets in Sky View
+- Both Sky Views include an optional reference layer for the Moon and seven planets, on by default with a shared remembered toggle. Uses the active saved/custom observing point and time, including observer parallax; geometric elevations match the satellite chart convention.
+- White Moon disc and orange planet diamonds, labels, selectable readouts, and Moon illuminated percentage. References appear above the horizon independently of satellite filters/counts. Satellite and celestial selection identities remain separate; astronomical calculation errors leave satellite rendering available.
+- Astronomy Engine 2.1.19 is bundled unchanged from the official release, with its MIT license, provenance/checksums, About attribution, and offline precaching. No external requests, credentials or API keys are needed at runtime.
+
+## 1.3.9 – Live Tracker Sky View
+- Adds the third Sky View tab to the single-satellite Live Tracker using the shared looking-up chart. Shows the selected satellite with its name, live bearing, elevation, range, lighting conditions and minimum-elevation ring from the saved observing location.
+- Below-horizon objects are not plotted on the sky dome; a message explains when they will appear. A missing location prompts Setup instead of using the fallback coordinates. Unusable orbital positions hide stale chart data.
+- Three-tab keyboard navigation and remembered selection work across satellite changes. Existing map/globe views remain available.
+
+## 1.3.8 – Sky View
+- Third tab in Visible Now shows the satellite sky from the active saved/custom observing point, using the same 1 s SGP4 positions and filters as the map/globe. Looking-up projection: north at top, east on left, overhead at center, horizon at rim; 30° and 60° elevation circles and the optional minimum-elevation ring.
+- Tap/click a marker or select a satellite in the keyboard-accessible list to highlight it and see its name, true-north bearing, elevation, range and viewing conditions. Optional chart labels avoid collisions. The view choice is remembered and three-tab keyboard navigation wraps correctly.
+- Responsive chart supports high-DPI displays, empty results, and offline use. No star catalog, constellation overlay or device orientation tracking in this version.
+
+## 1.3.7 – Visible Now
+- New navigation page shows all above-horizon satellites in the app catalog (all bundled categories plus imported/looked-up objects), updated every second from SGP4. Saved location or a separate custom point controls both views and is marked You. Custom coordinates never overwrite the global location.
+- Multi-satellite 2D Map and 3D Globe tabs, selection highlighting and labels, observer centering, and links to each satellite’s Live page. Globe heights are compressed by default to keep Earth readable with mixed LEO/navigation/high-altitude objects; actual altitude scale is optional. Numeric readouts always use actual positions. Existing single-satellite Live behavior is retained.
+- Highest-elevation-first list shows true-north bearing, elevation, range, sunlight/sky conditions, and TLE age. Filters for minimum elevation, compass sector and optional sunlit + dark sky. Default includes all above-horizon objects; brightness is not modeled and the catalog is not exhaustive.
+- New filtering module is precached for offline use; bad/decayed orbits are skipped independently.
+
+## 1.3.6 – Live tracker globe
+- Separate accessible 2D Map and 3D Globe tabs, with the last selection remembered across satellites and reloads. The existing readouts and map remain available.
+- Self-contained Canvas renderer uses the bundled coastline data: rotatable textured sphere, actual satellite altitude (spherical Earth approximation), Earth-fixed past/future trajectories, observer and radio coverage rings, with far-side occlusion. Shading is decorative, not a day/night model. No external library or runtime downloads.
+- Mouse drag, touch rotation and pinch zoom, wheel zoom, keyboard rotation/zoom, and center-on-satellite controls. Rendering is on demand; pending frames and pointer listeners are cleaned up on tab/view changes. The new renderer is precached for offline use.
+
 ## 1.3.5 – service worker vs. redirecting hosts (fix for the new Cloudflare Pages origin)
 - **Bug (found by the live smoke on the new origin):** Cloudflare Pages answers `/index.html` with a 308 redirect to `/`. The service worker pre-cached that **redirected** response and served it to navigations, which Chrome refuses ("a redirected response was used for a request whose redirect mode is not follow"): after the first visit every navigation/reload showed a browser error page. 1.3.4 on Pages was affected; GitHub Pages is not (no redirect).
 - **Fix:** every shell response is rebuilt as a plain (non-redirected) `Response` when precaching and again before it is served (so entries cached by 1.3.4 heal themselves on the next load). Pre-caching now fetches each file itself (`cache: "reload"`, all must be OK, same all-or-nothing install as before). Regression tests with a redirecting host; the live smoke now also checks a real navigation under an active service worker. No other change.

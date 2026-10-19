@@ -16,9 +16,11 @@ Predictions use public orbital elements (TLEs) from [CelesTrak](https://celestra
 - **SAR satellites** ([list below](#sar-satellites-radar-panel)): the Doppler tab shows a **Radar panel** (band, nominal centre frequency, bandwidth, polarizations, modes, source) instead of up/downlinks, with the one-way carrier Doppler at your position, ascending/descending direction, local solar time and an approximate swath-proximity check at closest approach.
 - **Pass prediction** for 1–10 days: AOS / max-elevation (TCA) / LOS times, azimuth + compass point, duration, max elevation, sorted list, tap a pass for detail. Minimum-elevation filter (default 10°; AOS/LOS are when the satellite crosses that elevation). **VISIBLE** flag for ISS/Tiangong: satellite sunlit (Earth shadow test), observer's sun elevation below −6°, satellite above horizon.
 - **Pass detail**: polar sky plot (AOS/TCA/LOS marks, time ticks, visible part highlighted, live "NOW" marker), az/el/range/range-rate table at 10/20/30 s, `.ics` export, in-app reminder.
-- **Live tracker**: az, el, range, range-rate, lat/lon/alt, speed, sunlit/eclipsed, 1 s updates; equirectangular map with a small bundled coastline, ground track (past + future), footprint circle (0° horizon and your minimum elevation).
+- **Live tracker**: az, el, range, range-rate, lat/lon/alt, speed, sunlit/eclipsed, 1 s updates; separate **2D Map / 3D Globe / Sky View** tabs (choice remembered), an offline globe with drag/touch/keyboard rotation, zoom and a center-on-satellite control, satellite altitude and Earth-fixed trajectories; equirectangular map with a small bundled coastline, ground track (past + future), footprint circle (0° horizon and your minimum elevation). Sky View shows the selected satellite from your saved observing location with live bearing/elevation/range and lighting conditions; below-horizon satellites are explained without plotting them above the horizon.
+- **Visible Now**: all catalog satellites above the observing point, updated every second, with **2D Map / 3D Globe / Sky View** tabs (globe heights compressed for readability, with an actual-scale option). Uses your saved location or a separate custom latitude/longitude/elevation. Shows true-north compass bearings, elevation, range, sunlight/sky conditions and TLE age; filter by minimum elevation, compass direction, or sunlit + dark sky. Sky View is a whole-sky chart looking up: north at top, east on the left, overhead at center and horizon at rim, with 30°/60° elevation rings. Tap a sky marker or select a row for the satellite name and current readouts; labels avoid overlapping when enabled. Stars/constellations and phone orientation tracking are not included. Select a row to label the satellite, or open its Live page. Loads all bundled catalog categories, including imports/lookups; this is not a catalog of every orbiting object and favorable lighting does not guarantee naked-eye visibility.
 - **Doppler calculator** with a bundled, *approximate* frequency table (FM repeaters, linear transponders, APRS/digital, APT/LRPT): live Doppler-corrected receive/transmit frequency, a passband slider for linear transponders, and a Doppler-vs-time table across any upcoming pass.
 - **Alerts**: "Next pass" countdown banner (favorites); per-pass reminders with the Notification API where the platform allows it; `.ics` calendar export (with an alert) for one pass or the whole list.
+- **Sky references**: both Sky Views include a shared **Show Moon, planets and Polaris** toggle (on by default). Above-horizon Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune and Polaris appear as labeled reference markers, with bearing/elevation readouts and the Moon’s illuminated percentage. Satellite filters/counts do not apply to these references; daylight and brightness may prevent seeing them, and some planets need optical aid. Calculations use [Astronomy Engine 2.1.19](https://github.com/cosinekitty/astronomy/tree/v2.1.19), MIT ([bundled license](js/vendor/astronomy-LICENSE.md), [source/provenance](js/vendor/astronomy-README.md)), with observer parallax and geometric elevations. Polaris is a lavender star labeled “Polaris · North Star”, with its own bearing/elevation readout. No runtime service or API key is needed.
 - **Offline**: app shell, bundled TLE snapshots for **every category** and the map are precached. First launch offline works from the snapshots; cached TLEs are used afterwards.
 
 ## Install
@@ -151,6 +153,10 @@ Propagation uses **[satellite.js](https://github.com/shashwatak/satellite-js) 6.
 
 Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry, az/el/range/range-rate, Meeus low-precision sun position (~0.01°), cylindrical Earth-shadow test, pass search (20 s sampling + bisection for AOS/LOS, golden-section for max elevation), Doppler, `.ics`, Maidenhead.
 
+### Polaris reference
+
+Polaris uses the bundled Astronomy Engine `Star1` definition with [SIMBAD’s alf UMi catalog entry](https://simbad.u-strasbg.fr/simbad/sim-basic?Ident=Polaris) (Hipparcos re-reduction, van Leeuwen 2007): ICRS epoch J2000 RA 02h31m49.09456s, declination +89°15′50.7923″, parallax 7.54 mas (about 433 light-years). Astronomy Engine converts this to the observing point’s current geometric bearing/elevation, including precession/nutation and observer corrections. The small stellar proper motion is omitted (about 1 arcsecond from 2000 to 2026, below chart resolution). Polaris is not pinned to exact north, and is hidden whenever below the active point’s horizon. No star catalog download is needed at runtime.
+
 ## Approximations (read this)
 
 - **Geometric elevation.** Elevations, AOS and LOS use the geometric (airless) direction to the satellite. Atmospheric refraction (about 0.5° at the horizon, less higher up) is ignored, so a real signal can appear slightly before the predicted AOS and fade slightly after LOS. AOS/LOS are the times the satellite crosses your *minimum elevation* (default 10°), where refraction is only a few arc-minutes.
@@ -166,6 +172,18 @@ Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry,
 - **LOS (or AOS) not found within the limit:** the pass is kept, the time is a lower bound and `truncated = true` (`aosTruncated` for the AOS side). The app shows "LOS ≥" on the list and a warning on the detail page.
 
 ## Release notes
+
+- **1.3.11** – Polaris joins the reference layer in both Sky Views as a labeled lavender star, with calculated bearing/elevation from the active saved/custom point.
+
+- **1.3.10** – Optional Moon and seven-planet reference layer in both Sky Views, with selectable readouts and Moon illumination. Astronomy Engine 2.1.19 is bundled under MIT and precached for offline use.
+
+- **1.3.9** – Live Tracker gains the Sky View tab for the selected satellite, with saved-location readouts, below-horizon messaging, and remembered three-tab navigation.
+
+- **1.3.8** – Sky View is the third Visible Now tab: live whole-sky satellite chart from the same observing point, with compass/elevation grid, marker selection, shared filters, and optional labels.
+
+- **1.3.7** – Visible Now: all above-horizon catalog satellites at your saved location or a separate observing point, with compass/elevation readouts, condition filters, and multi-satellite map and globe.
+
+- **1.3.6** – Live view: separate 2D Map and 3D Globe tabs, remembered selection, interactive offline globe with satellite altitude, past/future trajectories, observer and coverage rings.
 
 - **1.3.5** – Service-worker fix for hosts that redirect `/index.html` → `/` (Cloudflare Pages): navigations after the first visit failed with a browser error page; the shell is now always cached/served as a plain response.
 - **1.3.4** – Own origin: served from Cloudflare Pages `https://satpass-3wj.pages.dev` (headers file, build script, redeploy docs, proxy origin), GitHub Pages is a deprecated mirror with a notice banner.
