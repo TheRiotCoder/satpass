@@ -1,6 +1,6 @@
 /* SatPass service worker (adapted from rf-toolbox) – offline app shell.
    VERSION is the single version string for the app (the About page reads it from the cache name). Bump it on every release. */
-const VERSION = "satpass-v1.3.13";
+const VERSION = "satpass-v1.5.0";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/style.css",
   "js/vendor/satellite.min.js", "js/grid.js", "js/doppler.js", "js/format.js", "js/tle.js", "js/passes.js", "js/ics.js", "js/radio.js", "js/catalog.js", "js/sources.js",

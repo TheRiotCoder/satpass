@@ -28,6 +28,7 @@
   // so this is a cheap gate to decide whether to show the option at all.
   function supported(e) {
     var v = env(e);
+    if (v.loc.protocol === "satpass:") return Promise.resolve({ ok: false, reason: "Desktop vault unlock uses your passphrase; browser passkeys are not available on this app's local address." });
     if (!v.secure) return Promise.resolve({ ok: false, reason: "needs HTTPS" });
     if (!v.PKC || !v.nav.credentials || !v.nav.credentials.create || !v.nav.credentials.get) return Promise.resolve({ ok: false, reason: "no WebAuthn" });
     var rp = rpIdOf(v); if (Src && Src.sharedOrigin(rp)) return Promise.resolve({ ok: false, shared: true, reason: "shared origin: every app on " + rp + " shares this storage and passkey" });

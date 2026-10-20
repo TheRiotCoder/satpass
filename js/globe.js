@@ -57,7 +57,7 @@
       if (!state || !width || disposed) return;
       var w = width, h = height, dpr = Math.min(window.devicePixelRatio || 1, 2), radius = Math.min(w, h) * 0.43 / extent * zoom, cx = w / 2, cy = h / 2;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
-      canvas.style.width = "100%"; canvas.style.height = h + "px";
+      canvas.style.width = "100%"; canvas.style.height = "auto";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = "#080f1e"; ctx.fillRect(0, 0, w, h);
       // Deterministic, quiet star field.
       ctx.fillStyle = "#63758f";

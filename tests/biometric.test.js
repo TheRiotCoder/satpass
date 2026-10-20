@@ -22,6 +22,7 @@ const E = (n, m) => { const e = new Error(m || n); e.name = n; return e; };
   ok("hidden when no Face ID / fingerprint / Hello is set up", (await Bio.supported(mk({ PKC: { isUserVerifyingPlatformAuthenticatorAvailable: async () => false } }).env)).ok === false);
   ok("hidden when getClientCapabilities says PRF is unsupported; shown when it says yes or throws", (await Bio.supported(mk({ PKC: { getClientCapabilities: async () => ({ "extension:prf": false }) } }).env)).ok === false && (await Bio.supported(mk({ PKC: { getClientCapabilities: async () => ({ "extension:prf": true }) } }).env)).ok === true && (await Bio.supported(mk({ PKC: { getClientCapabilities: async () => { throw new Error("x"); } } }).env)).ok === true);
   ok("localhost is allowed (dev / tests)", (await Bio.supported(mk({ loc: { hostname: "localhost" } }).env)).ok === true);
+  ok("desktop local origin uses passphrase unlock without offering unsupported passkeys", (await Bio.supported(mk({ loc: { hostname: "app", protocol: "satpass:" } }).env)).ok === false);
 
   const m = mk(), r = await Bio.enroll(m.env), pk = m.calls.create[0].publicKey;
   ok("enroll: platform authenticator, user verification REQUIRED, rpId = page host, PRF eval requested, no attestation", pk.rp.id === "satpass.example.com" && pk.authenticatorSelection.userVerification === "required" && pk.authenticatorSelection.authenticatorAttachment === "platform" && pk.extensions.prf.eval.first.length === 32 && pk.attestation === "none" && pk.pubKeyCredParams.some(p => p.alg === -7));

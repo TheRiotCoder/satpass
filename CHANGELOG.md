@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.0 – Adaptive dashboard
+
+- Adds executable `start-web.sh` and `build-install-mint.sh` helpers for the local Python server and Linux Mint desktop build/install workflow.
+- Desktop windows omit the File/Edit/View/Help menu bar.
+
+- Uses a fluid Grid shell, a desktop sidebar, compact tablet navigation, and mobile bottom navigation. Passes gains a shared selected-pass preview; Live/Visible Now, Doppler, Satellites and Setup use their available panel space.
+- Canvas renderers measure their actual panels, keep their aspect ratios and high-density backing buffers, and redraw through a cleaned-up ResizeObserver lifecycle without restarting predictions during resize.
+- Adds responsive browser regression coverage for all routes, 18 viewport sizes, all live views, themes, offline use, and timer/observer cleanup.
+- Fixes desktop automatic location by requesting a consented browser handoff over a temporary loopback-only connection; no Google API account is required.
+
+## 1.4.0 – Electron desktop packaging
+- Adds the native desktop wrapper in this repository, pinned Electron/build dependencies, Linux AppImage and `.deb` targets, and a Windows NSIS target with a Linux/Windows GitHub Actions artifact workflow. Application assets and all offline catalogs are packaged directly; no separate web server or initial online cache fill is needed.
+- Adds an isolated, sandboxed desktop window, native menu, controlled external links, local license viewers, save dialogs and permission prompts. A restricted local asset protocol supports the existing ES modules and Web Crypto without exposing Node.js to renderer code. Settings live in a persistent desktop profile, separate from browser storage.
+- Desktop skips web install/service-worker updates and uses manual package updates. Passphrase credential encryption remains available; unsupported local-origin browser passkeys are not offered. Documents Linux/Windows development, installation, offline behavior and runtime limitations. Adds desktop policy and offline launch/restart/3D smoke tests.
+
 ## 1.3.13 – 3D Sky horizon scenery
 - Adds two seamless layers of locally drawn tree silhouettes around the 3D Sky horizon on Live Tracker and Visible Now. Distant and nearby trees adapt their dark colors to the illustrative day/night sky, helping distinguish ground from sky.
 - Scenery rotates with the camera and works offline without additional assets or libraries. Compass marks still identify the true, level horizon; decorative trees do not alter visibility calculations or hide satellite/reference markers.

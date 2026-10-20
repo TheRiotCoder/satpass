@@ -223,7 +223,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   check('Visible Now: southern custom point hides Polaris', await ev(`!document.querySelector('#visibleCelestialList [data-body="star:Polaris"]')`));
   check('Visible Now: Moon/planet readouts use custom point', await ev(`(() => { const b=document.querySelector('#visibleCelestialList .celestial-object'); if(!b) return true; const expected=SatCelestial.positions({lat:-33.86,lon:151.21,alt:SatStore.settings.alt||0},Date.now()).find(p=>p.id===b.dataset.body); const shown=Number(b.textContent.match(/Elevation ([\\d.-]+)/)[1]); return expected && Math.abs(shown-expected.el)<0.2; })()`));
   await ev(setVal('#visibleDirection', 'N'));
-  check('Visible Now: direction filter matches north sector', await ev(`[...document.querySelectorAll('.visible-bearing')].every(e=>/ N$/.test(e.textContent))`));
+  check('Visible Now: direction filter matches north sector', await ev(`[...document.querySelectorAll('.visible-bearing')].every(e=>{const a=Number(e.textContent.match(/Bearing ([\\d.]+)/)[1]);return a>=337.5 || a<=22.5;})`));
   await ev(setVal('#visibleDirection', 'all'));
   await ev(setVal('#visibleOptical', 'optical'));
   check('Visible Now: optional optical filter labels sunlit/dark only', await ev(`[...document.querySelectorAll('.visible-conditions')].every(e=>e.textContent==='Sunlit · dark sky')`));
@@ -364,6 +364,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
   await ev(setVal('#q', '')); await go('#/live'); await sleep(800);
   check('Live selector has category groups and the favourited SAR satellite', await ev(`(() => { const g = [...document.querySelectorAll('#liveSel optgroup')].map(o => o.label); return ['Favorites','Curated','Amateur','SAR','Earth observation','Navigation','Science'].every(l => g.includes(l)) && [...document.querySelectorAll('#liveSel optgroup[label="Favorites"] option')].some(o => o.value === '39634'); })()`));
   await go('#/live/39634'); await sleep(1500);
+  await ev(`document.querySelector('#tab2d').click()`);
   check('live tracker for Sentinel-1A (SAR)', await ev(`/SENTINEL-1A/.test(document.querySelector('#liveSel').selectedOptions[0].textContent) && !!document.querySelector('a[href="#/doppler/39634"]')`) && (await canvasInk('#map')) > 3000);
   await go('#/passes'); await sleep(2000);
   check('Passes: "My favorites" now includes Sentinel-1A passes', await ev(`[...document.querySelectorAll('.pass .t1')].some(t => /SENTINEL-1A/.test(t.textContent))`));
@@ -487,6 +488,7 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
     const r = await ev(`SatStore.refresh().then(r => r)`);
     check('offline refresh degrades gracefully (clear message, data kept)', r.ok === false && /offline/i.test(r.message) && (await ev('SatStore.data.sats.length')) > 150, r.message);
     await go('#/live/25544'); await sleep(1500);
+    await ev(`document.querySelector('#tab2d').click()`);
     check('offline: live tracker works from cached/bundled TLE', (await canvasInk('#map')) > 5000);
     await go('#/doppler/25544'); await sleep(1500);
     check('offline: Doppler works', await ev(`document.querySelectorAll('.dopp-big b').length`) === 2);

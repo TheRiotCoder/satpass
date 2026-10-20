@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.3.13";
+  var DAY = 86400000, APP_VERSION = "1.5.0";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -20,7 +20,8 @@
     bar.innerHTML = '📦 <span>SatPass has a new home: <a href="' + HOME_URL + '" rel="noopener">' + esc(HOME_URL.replace(/^https:\/\//, "").replace(/\/$/, "")) + '</a> (its own address, so biometric unlock works there). This copy keeps working, also offline. Saved logins and favourites do not move automatically: use <a href="#/settings">Setup → Encrypted backup</a> here, then import it there.</span> <button class="btn sm" id="movedHide" type="button">Hide</button>';
     bar.hidden = false; $("#movedHide").onclick = function () { S.save("movedHide", true); bar.hidden = true; };
   }
-  function isStandalone() { return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true; }
+  function isDesktop() { return location.protocol === "satpass:"; }
+  function isStandalone() { return isDesktop() || window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true; }
   function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
   function utc() { return !!S.settings.utc; }
   function clk(ms, sec) { return F.clock(ms, utc(), sec); }
@@ -76,19 +77,50 @@
   });
 
   /* ---------- views infrastructure ---------- */
-  var view = { token: 0, timers: [], tick: null, resize: null, dispose: null };
-  function clearView() { view.token++; view.timers.forEach(clearInterval); view.timers = []; if (view.dispose) view.dispose(); view.dispose = null; view.tick = null; view.resize = null; }
+  var view = { token: 0, timers: [], tick: null, resize: null, dispose: null, observer: null, frame: null };
+  function clearView() {
+    view.token++; view.timers.forEach(clearInterval); view.timers = [];
+    if (view.frame !== null) cancelAnimationFrame(view.frame); view.frame = null;
+    if (view.observer) view.observer.disconnect(); view.observer = null;
+    if (view.dispose) view.dispose(); view.dispose = null; view.tick = null; view.resize = null;
+  }
   // Timers are bound to the view that created them: a callback that fires after its view was replaced is ignored.
   function every(ms, fn) { var tok = view.token; view.timers.push(setInterval(function () { if (tok === view.token) fn(); }, ms)); }
   function setTitle(t) { titleEl.textContent = t; document.title = t === "SatPass" ? "SatPass – Satellite & ISS Pass Predictor" : t + " – SatPass"; }
-  function contentWidth() { return Math.max(240, (main.clientWidth || 360) - 28); }
+  function panelWidth(el) { return Math.max(1, el ? el.clientWidth : 1); }
+  function queueResize() {
+    if (view.frame !== null) return;
+    var token = view.token;
+    view.frame = requestAnimationFrame(function () { view.frame = null; if (token === view.token && view.resize) view.resize(); });
+  }
+  function watchSize(el) {
+    if (!el || typeof ResizeObserver === "undefined") return function () {};
+    if (!view.observer) {
+      var widths = new WeakMap();
+      view.observer = new ResizeObserver(function (entries) {
+        var changed = false;
+        entries.forEach(function (e) { var w = e.contentRect.width; if (widths.get(e.target) !== w) { widths.set(e.target, w); changed = true; } });
+        if (changed) queueResize();
+      });
+    }
+    var observer = view.observer; observer.observe(el);
+    return function () { observer.unobserve(el); };
+  }
+  function pageLayout(name) { main.className = "page page-" + name; }
+  function accessibleTables(host) {
+    $$(".tblwrap", host).forEach(function (el) {
+      el.tabIndex = 0; el.setAttribute("role", "region");
+      var section = el.closest("section"), heading = section && section.querySelector("h2,summary");
+      el.setAttribute("aria-label", (heading ? heading.textContent : "Data") + " table, scroll for more");
+    });
+  }
 
   // a malformed percent escape in the URL hash (e.g. #/%E0%A4%A) used to throw URIError here and abort boot (the service worker was never registered)
   function safeDecode(x) { try { return decodeURIComponent(x); } catch (e) { return ""; } }
   var ROUTES = {};
   // Re-render the current view in place (e.g. after a select changed). Must go through here, never invoke a view function directly:
   // that would leave the previous render's 1 s / 30 s timers running and they would keep overwriting the new DOM with stale state.
-  function rerender(name, a) { clearView(); ROUTES[name](a); }
+  function rerender(name, a) { clearView(); pageLayout(name); ROUTES[name](a); watchSize(main); accessibleTables(main); }
   function route() {
     clearView();
     var h = (location.hash || "#/").replace(/^#\/?/, ""), parts = h.split("?")[0].split("/").map(safeDecode), name = parts[0] || "passes";
@@ -99,9 +131,10 @@
       main.innerHTML = '<div class="banner">Loading satellite data…</div>'; var tk = view.token;
       S.ensureAll().then(function () { if (tk === view.token) route(); }); return;
     }
-    $$("#tabs a").forEach(function (a) { a.classList.toggle("on", a.dataset.tab === (name === "pass" ? "passes" : ROUTES[name] ? name : "passes")); });
+    $$("#tabs a").forEach(function (a) { var active = a.dataset.tab === (name === "pass" ? "passes" : ROUTES[name] ? name : "passes"); a.classList.toggle("on", active); if (active) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
     window.scrollTo(0, 0);
-    try { fn(parts.slice(1)); } catch (e) { console.error(e); main.innerHTML = '<div class="err">Something went wrong: ' + esc(e.message) + "</div>"; }
+    pageLayout(ROUTES[name] ? name : "passes");
+    try { fn(parts.slice(1)); watchSize(main); accessibleTables(main); } catch (e) { console.error(e); main.innerHTML = '<div class="err">Something went wrong: ' + esc(e.message) + "</div>"; }
   }
   function go(h) { if (location.hash === h) route(); else location.hash = h; }
 
@@ -312,13 +345,14 @@
   }
 
   /* ---------- Pass detail: compare with N2YO ---------- */
-  function n2yoCompareUi(n, pass, sat) {
-    var box = $("#n2box"); if (!box) return;
+  function n2yoCompareUi(n, pass, sat, host) {
+    function q(sel) { return $(sel, host); }
+    var box = q("#n2box"); if (!box) return;
     var cfg = S.sources.config(), rd = S.sources.readiness("n2yo");
     if (!cfg.enabled.n2yo || !rd.ready) { box.innerHTML = '<p class="note">Optional: compare this pass with N2YO – set it up in <a class="link" href="#/settings">Setup → Data sources</a>.</p>'; return; }
     box.innerHTML = '<div class="actions"><button class="btn" id="n2cmp" type="button">Compare with N2YO</button></div><div class="note" id="n2msg" aria-live="polite"></div><div id="n2out"></div>';
-    $("#n2cmp").onclick = function () {
-      var b = this, msg = $("#n2msg"), out = $("#n2out"), now = Date.now();
+    q("#n2cmp").onclick = function () {
+      var b = this, msg = q("#n2msg"), out = q("#n2out"), now = Date.now();
       if (pass.los < now) { msg.textContent = "N2YO only predicts upcoming passes; this one is over."; return; }
       var days = Math.min(10, Math.max(1, Math.ceil((pass.los - now) / DAY))), o = observer();
       b.disabled = true; msg.textContent = "Asking N2YO (one radiopasses request; free tier is 100/hour)…"; out.innerHTML = "";
@@ -344,7 +378,7 @@
     var s = S.settings, el = document.createElement("section"); el.className = "card"; el.id = "locCard";
     el.innerHTML = '<h2>Your location</h2>' +
       '<button class="btn primary block" id="gpsBtn" type="button">📍 Use my current location</button>' +
-      '<p class="note" id="gpsMsg">Location stays on your device (it is only stored in this browser). It is never sent anywhere.</p>' +
+      '<p class="note" id="gpsMsg">' + (isDesktop() ? 'Opens your regular browser to request location, then returns it to SatPass on this computer. Your browser may use an online location provider.' : 'SatPass stores your location on this device. Your browser may use an online location provider to find your position.') + '</p>' +
       '<div class="fields">' +
       '<div class="field"><label for="latIn">Latitude (°, N+)</label><input class="inp" id="latIn" inputmode="decimal" autocomplete="off" placeholder="e.g. 47.6 (decimal °)" value="' + (S.hasLocation() ? s.lat : "") + '"></div>' +
       '<div class="field"><label for="lonIn">Longitude (°, E+)</label><input class="inp" id="lonIn" inputmode="decimal" autocomplete="off" placeholder="e.g. -122.3 (decimal °)" value="' + (S.hasLocation() ? s.lon : "") + '"></div>' +
@@ -378,15 +412,21 @@
       if (onSaved) onSaved();
     };
     $("#gpsBtn", el).onclick = function () {
-      var m = $("#gpsMsg", el);
-      if (!navigator.geolocation) { m.textContent = "Geolocation isn't available in this browser – enter your position manually."; return; }
-      m.textContent = "Asking for your location…";
-      navigator.geolocation.getCurrentPosition(function (pos) {
+      var m = $("#gpsMsg", el), button = this, desktop = isDesktop() && window.satpassDesktop;
+      if (!desktop && !navigator.geolocation) { m.textContent = "Geolocation isn't available in this browser – enter your position manually."; return; }
+      button.disabled = true;
+      m.textContent = desktop ? "In your browser, choose Share location with SatPass and allow location. Return here when done." : "Asking for your location…";
+      function success(pos) {
+        button.disabled = false; if (!el.isConnected) return;
         var c = pos.coords; lat.value = c.latitude.toFixed(5); lon.value = c.longitude.toFixed(5); alt.value = c.altitude != null && isFinite(c.altitude) ? Math.round(c.altitude) : (alt.value || 0);
-        fromLatLon(); m.textContent = "Got a fix (±" + Math.round(c.accuracy) + " m). Tap “Save location”."; $("#saveLoc", el).click();
-      }, function (err) {
-        m.textContent = err.code === 1 ? "Location permission was denied. Allow it in your browser/site settings, or enter your position manually." : err.code === 3 ? "Timed out getting a location fix. Try again outdoors or enter it manually." : "Couldn't get your location (" + err.message + "). Enter it manually.";
-      }, { enableHighAccuracy: false, timeout: 15000, maximumAge: 600000 });
+        fromLatLon(); m.textContent = "Location saved (accuracy ±" + Math.round(c.accuracy) + " m)."; $("#saveLoc", el).click();
+      }
+      function failure(err) {
+        button.disabled = false; if (!el.isConnected) return;
+        m.textContent = desktop ? (err.message || "Browser location is unavailable. Try again or enter coordinates manually.") : err.code === 1 ? "Location permission was denied. Allow it in your browser/site settings, or enter your position manually." : err.code === 3 ? "Timed out getting a location fix. Try again outdoors or enter it manually." : "Couldn't get your location (" + err.message + "). Enter it manually.";
+      }
+      if (desktop) desktop.requestLocation().then(function (result) { if (result.ok) success(result); else failure(result); }).catch(function () { failure({ message: "Could not request browser location. Try again or enter coordinates manually." }); });
+      else navigator.geolocation.getCurrentPosition(success, failure, { enableHighAccuracy: false, timeout: 15000, maximumAge: 600000 });
     };
     return el;
   }
@@ -431,7 +471,7 @@
       '<select class="inp" id="daysSel" aria-label="Days" style="flex:0 1 110px">' + [1, 2, 3, 5, 7, 10].map(function (d) { return '<option value="' + d + '"' + (d === s.days ? " selected" : "") + ">" + d + " day" + (d > 1 ? "s" : "") + "</option>"; }).join("") + "</select>" +
       '<select class="inp" id="elSel" aria-label="Minimum elevation" style="flex:0 1 110px">' + [0, 5, 10, 15, 20, 30, 45].map(function (d) { return '<option value="' + d + '"' + (d === s.minEl ? " selected" : "") + ">min " + d + "°</option>"; }).join("") + "</select>" +
       '<label class="muted" style="display:flex;align-items:center;gap:6px;min-height:40px"><input type="checkbox" id="visChk"' + (visOnly ? " checked" : "") + ' style="width:20px;height:20px"> visible only</label></div>' +
-      '<div id="staleBox"></div><div id="passList"><div class="banner">Computing passes…</div></div><div id="passFoot"></div>';
+      '<div id="staleBox"></div><div class="passes-dashboard"><section class="pass-list-panel" aria-label="Upcoming passes"><div id="passList"><div class="banner">Computing passes…</div></div><div id="passFoot"></div></section><aside class="pass-preview" id="passPreview" aria-label="Selected pass preview"></aside></div>';
     $("#daysSel").onchange = function () { S.set({ days: Number(this.value) }); rerender("passes", a); };
     $("#elSel").onchange = function () { S.set({ minEl: Number(this.value) }); passCache = {}; refreshNextBar(); rerender("passes", a); };
     if ($("#scopeSel")) $("#scopeSel").onchange = function () { S.save("scope", this.value); rerender("passes", a); };
@@ -442,12 +482,37 @@
     if (stale.length) $("#staleBox").innerHTML = '<div class="banner warn">⚠️ Element sets older than ' + Tle.STALE_DAYS + ' days for: ' + stale.map(function (n) { return esc(nameOf(n)) + " (" + F.age(Date.now() - entry(n).epochMs) + ")"; }).join(", ") + '. Predictions may be off by minutes. Refresh on the <a class="link" href="#/sats">Sats</a> tab when online.</div>';
     var ds = dataStatus();
     if (ds.stale && !stale.length) $("#staleBox").innerHTML = '<div class="banner warn">⚠️ Your element-set data was fetched ' + F.age(ds.age) + ' ago. Refresh on the <a class="link" href="#/sats">Sats</a> tab when online.</div>';
+    var preview = null, selectedKey = null;
     (async function () {
       for (var i = 0; i < ids.length; i++) { if (token !== view.token) return; computePasses(ids[i], s.days); if (i % 2) await nextFrame(); }
       if (token !== view.token) return;
       renderPassList(ids, single, visOnly);
+      syncPreview();
     })();
-    every(30000, function () { if (token === view.token && $("#passList") && $$(".pass").length + 1) renderPassList(ids, single, visOnly); });
+    function syncPreview() {
+      var host = $("#passPreview"); if (!host) return;
+      var buttons = $$("#passList .pass"), chosen = buttons.filter(function (b) { return b.dataset.n + "/" + b.dataset.aos === selectedKey; })[0] || buttons[0];
+      if (!chosen) { if (preview) preview.dispose(); preview = null; selectedKey = null; delete host.dataset.pass; host.innerHTML = '<div class="banner">Select a pass when predictions are available.</div>'; return; }
+      selectedKey = chosen.dataset.n + "/" + chosen.dataset.aos;
+      buttons.forEach(function (b) { var active = b === chosen; b.classList.toggle("selected", active && wide()); if (wide()) b.setAttribute("aria-pressed", String(active)); else b.removeAttribute("aria-pressed"); });
+      if (!wide()) return;
+      if (host.dataset.pass !== selectedKey) {
+        if (preview) preview.dispose();
+        host.dataset.pass = selectedKey; preview = renderPassDetail(host, [chosen.dataset.n, chosen.dataset.aos], true);
+      }
+      if (preview) preview.resize();
+    }
+    function wide() { return window.matchMedia("(min-width:900px)").matches; }
+    $("#passList").onclick = function (event) {
+      var button = event.target.closest(".pass"); if (!button) return;
+      if (!wide()) return go("#/pass/" + button.dataset.n + "/" + button.dataset.aos);
+      selectedKey = button.dataset.n + "/" + button.dataset.aos; syncPreview();
+    };
+    view.resize = syncPreview;
+    view.tick = function () { if (wide() && preview) preview.tick(); };
+    view.dispose = function () { if (preview) preview.dispose(); };
+    every(1000, function () { if (wide() && preview) preview.tick(); });
+    every(30000, function () { if (token === view.token && $("#passList")) { renderPassList(ids, single, visOnly); syncPreview(); } });
   };
   function renderPassList(ids, single, visOnly) {
     var s = S.settings, now = Date.now(), list = [];
@@ -469,7 +534,6 @@
           '<div class="t2">' + F.compass(p.aosAz) + " " + Math.round(p.aosAz) + "° → " + F.compass(p.losAz) + " " + Math.round(p.losAz) + "° · " + (p.truncated ? "≥ " : "") + F.duration(p.durationSec) + (live ? " · ends in " + F.countdown(p.los - now) : " · in " + F.countdown(p.aos - now)) + "</div></button>";
       });
       box.innerHTML = html;
-      $$(".pass", box).forEach(function (b) { b.onclick = function () { go("#/pass/" + b.dataset.n + "/" + b.dataset.aos); }; });
     }
     $("#passFoot").innerHTML = '<div class="actions"><button class="btn" id="icsAll">📅 Export these ' + list.length + ' passes (.ics)</button></div>' +
       '<p class="note">Times in ' + F.tzLabel(now, utc()) + ". Minimum elevation " + s.minEl + "° (AOS/LOS are when the satellite crosses it). " + (list.some(function (p) { return p.naked; }) ? "VISIBLE = bright satellite (ISS/Tiangong) sunlit while the sky is dark (sun below −6°) and above the horizon; brightness and weather are not modelled. " : "") + "Observer " + esc(obsLabel()) + ". Predictions are only as good as the element sets – see About.</p>";
@@ -488,12 +552,15 @@
   }
 
   /* ===================== PASS DETAIL ===================== */
-  ROUTES.pass = function (a) {
+  function renderPassDetail(host, a, inline) {
+    function q(sel) { return $(sel, host); }
+    function qa(sel) { return $$(sel, host); }
+    var token = view.token;
     var n = Number(a[0]), aos = Number(a[1]);
-    setTitle("Pass detail");
+    if (!inline) setTitle("Pass detail");
     if (!S.hasLocation()) return go("#/passes");
     var e = entry(n), sat = satObj(n);
-    if (!e || !sat) { main.innerHTML = '<div class="err">No element set for NORAD ' + esc(a[0]) + ' – open the <a class="link" href="#/sats">Sats</a> tab.</div>'; return; }
+    if (!e || !sat) { host.innerHTML = '<div class="err">No element set for NORAD ' + esc(a[0]) + ' – open the <a class="link" href="#/sats">Sats</a> tab.</div>'; return; }
     var pass = null;
     (passCache[n] ? passCache[n].passes : []).forEach(function (p) { if (Math.abs(p.aos - aos) < 5000) pass = p; });
     if (!pass) {
@@ -501,15 +568,15 @@
       cand.forEach(function (p) { if (Math.abs(p.aos - aos) < best) { best = Math.abs(p.aos - aos); pass = p; } });
       if (pass) { pass.aosBeforeStart = pass.inProgressAtStart = pass.losAfterWindow = false; }   // the ±25 min window here is artificial
     }
-    if (!pass) { main.innerHTML = '<div class="banner warn">That pass is no longer available (the element sets or minimum elevation changed). <a class="link" href="#/passes">Back to passes</a></div>'; return; }
-    setTitle(nameOf(n) + " pass");
+    if (!pass) { host.innerHTML = '<div class="banner warn">That pass is no longer available (the element sets or minimum elevation changed). <a class="link" href="#/passes">Back to passes</a></div>'; return; }
+    if (!inline) setTitle(nameOf(n) + " pass");
     if (pass.bright === undefined) { pass.bright = !!(R.curated(n) && R.curated(n).bright); pass.naked = pass.bright && pass.visible; }
     var step = S.load("step", 30), now0 = Date.now(), old = Tle.isStale(e, now0), tleAge = Tle.ageDays(e, now0);
     var visTxt = pass.visible && !pass.bright ? "Sunlit satellite and dark sky, but too small/faint to see without optics (radio satellite)" : pass.visible ? "Visible ✔ " + clk(pass.visStart) + "–" + clk(pass.visEnd) + " (sunlit sat, dark sky)" :
       (!pass.sunlitAtTca ? "Not visible – satellite is in Earth's shadow" : (pass.sunElAtTca >= P.VISIBLE_SUN_EL ? "Not visible – sky too bright (sun " + fmt(pass.sunElAtTca, 0) + "° elevation)" : "Not visible"));
     var hasRadio = R.radios(n).length > 0, remKey = n + "-" + Math.round(pass.aos);
-    main.innerHTML = '<a class="link" href="#/passes">← Passes</a>' +
-      '<section class="card"><h2>' + esc(longName(n)) + ' <span class="muted">· ' + F.date(pass.aos, utc()) + "</span></h2>" + deadBanner(n) +
+    host.innerHTML = (inline ? '<div class="preview-heading"><h2>Selected pass</h2><a class="link" href="#/pass/' + n + '/' + Math.round(pass.aos) + '">Open pass detail →</a></div>' : '<a class="link" href="#/passes">← Passes</a>') + '<div class="detail-layout">' +
+      '<section class="card detail-summary"><h2>' + esc(longName(n)) + ' <span class="muted">· ' + F.date(pass.aos, utc()) + "</span></h2>" + deadBanner(n) +
       (old ? '<div class="banner warn">⚠️ This element set is ' + fmt(tleAge, 1) + " days old (> " + Tle.STALE_DAYS + "). Timing/position may be off – refresh on the Sats tab.</div>" : "") +
       '<div class="kv"><div class="big"><small>Max elevation</small><b>' + fmt(pass.maxEl, 0) + "°</b></div><div><small>Duration</small><b>" + F.duration(pass.durationSec) + "</b></div><div><small>Range at max el</small><b>" + Math.round(pass.rangeAtTcaKm).toLocaleString("en-US") + " km</b></div></div>" +
       '<div class="kv"><div><small>AOS ' + F.tzLabel(pass.aos, utc()) + "</small><b>" + clk(pass.aos, true) + "</b><br>" + az(pass.aosAz) + "</div><div><small>Max el (TCA)</small><b>" + clk(pass.tca, true) + "</b><br>" + az(pass.tcaAz) + "</div><div><small>LOS</small><b>" + clk(pass.los, true) + "</b><br>" + az(pass.losAz) + "</div></div>" +
@@ -517,52 +584,65 @@
       (pass.truncated ? '<div class="banner warn">⚠️ This pass is still going at the search limit (very long pass, e.g. a high-orbit satellite). <b>LOS and duration are lower bounds.</b></div>' : "") +
       (pass.aosTruncated ? '<div class="banner warn">⚠️ The satellite has been above the minimum elevation for more than 24 h; <b>AOS is a lower bound.</b></div>' : "") +
       '<details class="more"><summary>How AOS/LOS and “visible” are decided</summary><p class="note">AOS/LOS = the satellite crosses your minimum elevation (' + S.settings.minEl + '°), using geometric elevation (no atmospheric refraction, which would add roughly 0.5° at the horizon). “Visible” = the satellite is sunlit (simple cylindrical Earth-shadow model, no penumbra), the sun is below −6° at your location (civil twilight), and the satellite is above your horizon. Real visibility also depends on brightness, sky glow, weather and terrain.</p></details>' +
-      '<div class="canvaswrap"><canvas id="sky" role="img" aria-label="Sky plot of the pass"></canvas></div>' +
+      '</section><section class="card detail-sky"><h2>Sky plot</h2><div class="canvaswrap"><canvas id="sky" role="img" aria-label="Sky plot of the pass"></canvas></div>' +
       '<p class="note">Sky plot: centre = overhead, rim = horizon, N up, E right. <span style="color:#22d3ee">━</span> track, <span style="color:#fbbf24">━</span> visible part (ISS/Tiangong), ticks = time ' + (utc() ? "(UTC)" : "(local)") + ", dashed ring = minimum elevation.</p>" +
-      '<div class="actions"><button class="btn primary" id="icsOne">📅 Add to calendar (.ics) – alerts even when the app is closed</button><button class="btn" id="remBtn"></button>' +
+      '</section><section class="card detail-tools"><div class="actions"><button class="btn primary" id="icsOne">📅 Add to calendar (.ics) – alerts even when the app is closed</button><button class="btn" id="remBtn"></button>' +
       (hasRadio ? '<a class="btn" href="#/doppler/' + n + "/" + Math.round(pass.aos) + '">📻 Doppler for this pass</a>' : "") + '<a class="btn" href="#/live/' + n + '">🌍 Live tracker</a></div>' +
       '<div class="note" id="remMsg">Tip: the calendar event carries its own alert and works with the app closed. The in-app reminder only fires while SatPass is open or still running in the background.</div><div id="n2box"></div></section>' +
-      '<section class="card"><h2>Az / El / Range</h2><div class="toolbar"><span class="muted">Step</span><span class="seg" id="stepSeg">' + [10, 20, 30].map(function (v) { return '<button data-v="' + v + '" class="' + (v === step ? "on" : "") + '">' + v + " s</button>"; }).join("") + '</span></div>' +
-      '<div class="note" id="stepNote"></div><div class="tblwrap"><table><thead><tr><th>Time</th><th>Az</th><th></th><th>El</th><th>Range km</th><th>Rate km/s</th></tr></thead><tbody id="tbody"></tbody></table></div></section>' +
-      '<p class="disclaimer">Predicted from a TLE ' + F.age(Date.now() - e.epochMs) + " old (epoch " + new Date(e.epochMs).toISOString().slice(0, 16).replace("T", " ") + " UTC). Sat positions drift with TLE age (ISS: roughly 1–3 km/day along-track); treat times as ±several seconds when fresh, ±minutes when old.</p>";
-    var canvas = $("#sky"), longStep = Math.max(1, Math.ceil(pass.durationSec / 800)), track = P.trackPass(sat, observer(), pass.aos, pass.los, Math.max(5, longStep));
+      '<section class="card detail-series">' + (inline ? '<details class="more"><summary>Az / El / Range</summary>' : '<h2>Az / El / Range</h2>') + '<div class="toolbar"><span class="muted">Step</span><span class="seg" id="stepSeg">' + [10, 20, 30].map(function (v) { return '<button data-v="' + v + '" class="' + (v === step ? "on" : "") + '">' + v + " s</button>"; }).join("") + '</span></div>' +
+      '<div class="note" id="stepNote"></div><div class="tblwrap"><table><thead><tr><th>Time</th><th>Az</th><th></th><th>El</th><th>Range km</th><th>Rate km/s</th></tr></thead><tbody id="tbody"></tbody></table></div>' + (inline ? '</details>' : '') + '</section>' +
+      '<p class="disclaimer">Predicted from a TLE ' + F.age(Date.now() - e.epochMs) + " old (epoch " + new Date(e.epochMs).toISOString().slice(0, 16).replace("T", " ") + " UTC). Sat positions drift with TLE age (ISS: roughly 1–3 km/day along-track); treat times as ±several seconds when fresh, ±minutes when old.</p></div>";
+    var info = document.createElement("div"), layout = q(".detail-layout"); info.className = "detail-info";
+    info.appendChild(q(".detail-summary")); info.appendChild(q(".detail-tools")); layout.insertBefore(info, layout.firstChild);
+    var canvas = q("#sky"), tableWide = null, longStep = Math.max(1, Math.ceil(pass.durationSec / 800)), track = P.trackPass(sat, observer(), pass.aos, pass.los, Math.max(5, longStep));
     function effStep() { return Math.max(step, Math.ceil(pass.durationSec / 300 / 10) * 10); }
-    function drawSky() { var sz = Math.min(contentWidth(), 440); Dr.skyplot(canvas, sz, track, { utc: utc(), minEl: S.settings.minEl, tca: pass.tca, now: Date.now(), bright: pass.bright, truncated: pass.truncated }); }
+    function drawSky() {
+      if (inline) { var wideTable = host.clientWidth >= 1200; if (wideTable !== tableWide) { q(".detail-series details").open = wideTable; tableWide = wideTable; } }
+      var width = canvas.parentElement.clientWidth;
+      if (width < 80 || !canvas.isConnected) return;
+      Dr.skyplot(canvas, Math.min(width, 600), track, { utc: utc(), minEl: S.settings.minEl, tca: pass.tca, now: Date.now(), bright: pass.bright, truncated: pass.truncated });
+    }
     function fillTable() {
       var rows = P.trackPass(sat, observer(), pass.aos, pass.los, effStep()), html = "";
       rows.forEach(function (r) { html += '<tr data-t="' + Math.round(r.t) + '"><td>' + clk(r.t, true) + "</td><td>" + Math.round(r.az) + "°</td><td>" + F.compass(r.az) + "</td><td>" + fmt(r.el, 1) + "°</td><td>" + Math.round(r.rangeKm) + "</td><td>" + fmt(r.rrKmS, 2) + "</td></tr>"; });
-      $("#tbody").innerHTML = html;
-      $("#stepNote").textContent = effStep() > step ? "Long pass: step increased to " + effStep() + " s to keep the table readable." : "";
+      q("#tbody").innerHTML = html;
+      q("#stepNote").textContent = effStep() > step ? "Long pass: step increased to " + effStep() + " s to keep the table readable." : "";
     }
     function markNow() {
-      var rows = $$("#tbody tr"), now = Date.now(), cur = null;
+      var rows = qa("#tbody tr"), now = Date.now(), cur = null;
       rows.forEach(function (r) { r.classList.remove("cur"); if (+r.dataset.t <= now && now <= pass.los) cur = r; });
       if (cur) cur.classList.add("cur");
     }
     drawSky(); fillTable(); markNow();
-    view.resize = drawSky; view.tick = function () { drawSky(); markNow(); };
-    if (pass.aos <= Date.now() && pass.los > Date.now() - 1000) every(1000, view.tick);
-    else every(15000, view.tick);
-    $$("#stepSeg button").forEach(function (b) { b.onclick = function () { step = Number(b.dataset.v); S.save("step", step); $$("#stepSeg button").forEach(function (x) { x.classList.toggle("on", x === b); }); fillTable(); markNow(); }; });
-    $("#icsOne").onclick = function () { downloadIcs([pass], "satpass-" + nameOf(n).replace(/[^A-Za-z0-9]+/g, "-") + "-" + F.dateKey(pass.aos, true) + ".ics"); };
-    n2yoCompareUi(n, pass, sat);
-    var rb = $("#remBtn");
+    var unwatch = watchSize(canvas.parentElement); accessibleTables(host);
+    qa("#stepSeg button").forEach(function (b) { b.onclick = function () { step = Number(b.dataset.v); S.save("step", step); qa("#stepSeg button").forEach(function (x) { x.classList.toggle("on", x === b); }); fillTable(); markNow(); }; });
+    q("#icsOne").onclick = function () { downloadIcs([pass], "satpass-" + nameOf(n).replace(/[^A-Za-z0-9]+/g, "-") + "-" + F.dateKey(pass.aos, true) + ".ics"); };
+    n2yoCompareUi(n, pass, sat, host);
+    var rb = q("#remBtn");
     function remState() {
       var r = reminders().filter(function (x) { return x.id === remKey; })[0];
       rb.textContent = r ? "🔔 In-app reminder set (" + r.lead + " min before) – cancel" : "🔔 In-app reminder (" + S.settings.leadMin + " min before, only while SatPass is open)";
-      $("#remMsg").textContent = r ? "" : notifHelp();
+      q("#remMsg").textContent = r ? "" : notifHelp();
     }
     rb.onclick = function () {
       var r = reminders().filter(function (x) { return x.id === remKey; })[0];
       if (r) { setReminders(reminders().filter(function (x) { return x.id !== remKey; })); remState(); toast("Reminder cancelled"); return; }
       if (pass.aos - S.settings.leadMin * 60000 < Date.now() && pass.los < Date.now()) return toast("That pass is over");
       ensureNotifPermission().then(function (perm) {
+        if (token !== view.token || !host.isConnected || !host.contains(rb)) return;
         var list = reminders(); list.push({ id: remKey, norad: n, name: nameOf(n), aos: pass.aos, los: pass.los, lead: S.settings.leadMin, maxEl: pass.maxEl, fired: false }); setReminders(list);
         remState();
         toast(perm === "granted" ? "Reminder set – keep SatPass open (or in the background)" : "In-app reminder set (system notifications aren't enabled)", 3800);
       });
     };
     remState();
+    return { resize: drawSky, tick: function () { drawSky(); markNow(); }, dispose: unwatch };
+  }
+  ROUTES.pass = function (a) {
+    var detail = renderPassDetail(main, a, false);
+    if (!detail) return;
+    view.resize = detail.resize; view.tick = detail.tick; view.dispose = detail.dispose;
+    every(1000, detail.tick);
   };
 
   /* ---------- reminders / notifications ---------- */
@@ -583,7 +663,7 @@
     toast(title + " – " + body, 8000);
     if (!notifSupported() || Notification.permission !== "granted") return;
     var opts = { body: body, icon: "icons/icon-192.png", tag: "satpass-pass", data: { url: url || "./" } };
-    if (navigator.serviceWorker && navigator.serviceWorker.ready) navigator.serviceWorker.ready.then(function (r) { return r.showNotification(title, opts); }).catch(function () { try { new Notification(title, opts); } catch (e) {} });
+    if (!isDesktop() && navigator.serviceWorker && navigator.serviceWorker.ready) navigator.serviceWorker.ready.then(function (r) { return r.showNotification(title, opts); }).catch(function () { try { new Notification(title, opts); } catch (e) {} });
     else try { new Notification(title, opts); } catch (e) {}
   }
   function checkReminders() {
@@ -689,7 +769,7 @@
     var sat = satObj(n);
     main.innerHTML = '<div class="toolbar"><select class="inp" id="liveSel" aria-label="Satellite">' + satSelectHtml(n) + '</select><button class="btn" id="liveFav" aria-label="Toggle favorite"></button></div>' +
       (sat ? "" : '<div class="err">Couldn\'t initialise this satellite\'s orbit (decayed or bad elements).</div>') +
-      '<section class="card"><div id="liveHead" class="note" style="margin-top:0"></div><div class="readout" id="liveRead"></div>' +
+      '<div class="live-dashboard"><section class="card live-telemetry"><h2>Position now</h2><div id="liveHead" class="note" style="margin-top:0"></div><div class="readout" id="liveRead"></div></section><section class="card tracker-visual"><h2>Orbit &amp; sky</h2>' +
       '<div class="live-view-tabs" role="tablist" aria-label="Tracker view"><button class="btn" type="button" role="tab" id="tab2d" aria-controls="panel2d" aria-selected="true">2D Map</button><button class="btn" type="button" role="tab" id="tab3d" aria-controls="panel3d" aria-selected="false" tabindex="-1">3D Globe</button><button class="btn" type="button" role="tab" id="tabsky" aria-controls="panelsky" aria-selected="false" tabindex="-1">Sky View</button><button class="btn" type="button" role="tab" id="tabground" aria-controls="panelground" aria-selected="false" tabindex="-1">3D Sky</button></div>' +
       '<div id="panel2d" role="tabpanel" aria-labelledby="tab2d"><div class="canvaswrap"><canvas id="map" role="img" aria-label="World map with satellite position and ground track"></canvas></div>' +
       '<p class="note">Map: <span style="color:#f472b6">●</span> satellite, solid line = next 100 min ground track, dashed = last 50 min, ring = radio horizon (0° elevation), amber ring = your minimum elevation, <span style="color:#4ade80">▲</span> you.</p></div>' +
@@ -701,7 +781,7 @@
       '<div class="canvaswrap" id="liveSkyChart"><canvas id="liveSkyCanvas" class="sky-chart" role="img" aria-label="Selected satellite in the sky from your saved location. North at top, east on left, overhead at center, horizon at rim." aria-describedby="liveSkyHelp liveSkyReadout liveSkyStatus"></canvas></div><p class="note" id="liveSkyReadout"></p>' +
       '<p class="note" id="liveSkyHelp">Looking up: north at top, east on left. Center = overhead (90°); outer ring = horizon (0°). Hold the chart overhead with N toward true north. Pink = selected satellite. Dashed amber ring = your minimum elevation, when set. Other stars and constellations are not included.</p></div>' +
       '<div id="panelground" role="tabpanel" aria-labelledby="tabground" hidden>' + groundHtml("liveGround") + '<p class="note" id="liveGroundSelection"></p></div><div id="liveSkyReferences" hidden>' + celestialHtml("liveCelestial") + '</div>' +
-      '<div id="liveNext"></div><div class="actions"><a class="btn" href="#/passes/' + n + '">Passes for this satellite</a>' + (R.radios(n).length ? '<a class="btn" href="#/doppler/' + n + '">📻 Doppler</a>' : radarInfoOf(n) ? '<a class="btn" href="#/doppler/' + n + '">📡 Radar</a>' : "") + "</div></section>" +
+      '</section><section class="card live-context"><h2>Next pass &amp; actions</h2><div id="liveNext"></div><div class="actions"><a class="btn" href="#/passes/' + n + '">Passes for this satellite</a>' + (R.radios(n).length ? '<a class="btn" href="#/doppler/' + n + '">📻 Doppler</a>' : radarInfoOf(n) ? '<a class="btn" href="#/doppler/' + n + '">📡 Radar</a>' : "") + "</div></section></div>" +
       '<p class="disclaimer">Position from SGP4 using a TLE ' + (entry(n) ? F.age(Date.now() - entry(n).epochMs) : "?") + ' old. Not for navigation.</p>';
     $("#liveSel").onchange = function () { go("#/live/" + this.value); };
     var fb = $("#liveFav"); function favState() { fb.textContent = S.isFav(n) ? "★ Favorite" : "☆ Favorite"; }
@@ -751,9 +831,35 @@
              future: P.groundTrack(sat, obs || P.makeObserver(0, 0, 0), now, now + 100 * 60000, 30).map(function (p) { return [p.lon, p.lat, p.alt]; }) };
       trackAt = now;
     }
+    var scene = null;
+    function drawScene() {
+      if (!scene) return;
+      var s = scene.s, drawing = scene.drawing, now = scene.now;
+      if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#globe")); globe.update(drawing, panelWidth($("#globe").parentElement)); }
+      else if (mode === "sky" || mode === "ground") {
+        $("#liveSkyChart").hidden = !obs;
+        $("#liveGround").hidden = !obs;
+        if (obs) {
+          var bodies = renderCelestial("liveCelestial", { lat: S.settings.lat, lon: S.settings.lon, alt: S.settings.alt || 0 }, now, celestialSelected);
+          var skyItems = [{ id: n, name: nameOf(n), az: s.az, el: s.el, selected: true }].concat(bodies);
+          if (mode === "ground") {
+            if (!ground) ground = window.SatGround.create($("#liveGround"), function (hit) { celestialSelected = hit.kind === "satellite" || !hit.kind ? null : hit.id; tick(); });
+            ground.update(skyItems, { minEl: S.settings.minEl, sunEl: s.sunEl, labels: true, centerSelected: true });
+          } else liveSkyData = window.SatSky.draw($("#liveSkyCanvas"), panelWidth($("#liveSkyCanvas").parentElement), skyItems, { minEl: S.settings.minEl });
+          $("#liveSkyStatus").textContent = s.el < 0 ? "Below your horizon (" + fmt(s.el, 1) + "°). The satellite will appear on the chart when it rises." : s.el < S.settings.minEl ? "Above the horizon, below your " + S.settings.minEl + "° minimum elevation setting." : "Above your horizon. Position updates every second.";
+          $("#liveSkyReadout").textContent = nameOf(n) + " · Bearing " + az(s.az) + " · Elevation " + fmt(s.el, 1) + "° · Range " + Math.round(s.rangeKm).toLocaleString("en-US") + " km · " + window.SatVisible.conditions(s);
+          $("#liveGroundStatus").textContent = $("#liveSkyStatus").textContent.replace("chart", "sky");
+          var bodyPick = bodies.filter(function (b) { return b.id === celestialSelected; })[0];
+          $("#liveGroundSelection").textContent = bodyPick ? bodyPick.name + " · " + celestialReadout(bodyPick) : $("#liveSkyReadout").textContent;
+          $("#liveGroundFind").disabled = s.el < 0 && !bodyPick;
+        } else { liveSkyData = null; renderCelestial("liveCelestial", null, now, celestialSelected); }
+      }
+      else Dr.worldmap(canvas, panelWidth(canvas.parentElement), drawing);
+    }
     function tick() {
       var now = Date.now(), o = obs || P.makeObserver(0, 0, 0), s = P.stateAt(sat, o, now, true);
       if (!s) {
+        scene = null;
         $("#liveRead").innerHTML = '<div class="err">SGP4 could not propagate this satellite now.</div>';
         $("#liveSkyStatus").textContent = "No valid orbital position is available for this satellite now.";
         $("#liveSkyReadout").textContent = ""; $("#liveSkyChart").hidden = true;
@@ -769,32 +875,13 @@
       $("#liveHead").innerHTML = (obs ? (up ? "<b style='color:var(--good)'>Above your horizon</b>" : "Below your horizon") : "<b>Set your location (Setup) for az/el</b>") + " · " + new Date(now).toISOString().slice(11, 19) + " UTC";
       var fp0 = P.footprintAngleDeg(s.altKm, 0), fpm = obs ? P.footprintAngleDeg(s.altKm, S.settings.minEl) : 0;
       var drawing = { sat: s, label: nameOf(n), track: tr, obs: obs ? { lat: S.settings.lat, lon: S.settings.lon } : null, footprint0: fp0, footprintMin: S.settings.minEl > 0 ? fpm : 0 };
-      if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#globe")); globe.update(drawing, $("#panel3d").clientWidth || contentWidth()); }
-      else if (mode === "sky" || mode === "ground") {
-        $("#liveSkyChart").hidden = !obs;
-        $("#liveGround").hidden = !obs;
-        if (obs) {
-          var bodies = renderCelestial("liveCelestial", { lat: S.settings.lat, lon: S.settings.lon, alt: S.settings.alt || 0 }, now, celestialSelected);
-          var skyItems = [{ id: n, name: nameOf(n), az: s.az, el: s.el, selected: true }].concat(bodies);
-          if (mode === "ground") {
-            if (!ground) ground = window.SatGround.create($("#liveGround"), function (hit) { celestialSelected = hit.kind === "satellite" || !hit.kind ? null : hit.id; tick(); });
-            ground.update(skyItems, { minEl: S.settings.minEl, sunEl: s.sunEl, labels: true, centerSelected: true });
-          } else liveSkyData = window.SatSky.draw($("#liveSkyCanvas"), $("#panelsky").clientWidth || contentWidth(), skyItems, { minEl: S.settings.minEl });
-          $("#liveSkyStatus").textContent = s.el < 0 ? "Below your horizon (" + fmt(s.el, 1) + "°). The satellite will appear on the chart when it rises." : s.el < S.settings.minEl ? "Above the horizon, below your " + S.settings.minEl + "° minimum elevation setting." : "Above your horizon. Position updates every second.";
-          $("#liveSkyReadout").textContent = nameOf(n) + " · Bearing " + az(s.az) + " · Elevation " + fmt(s.el, 1) + "° · Range " + Math.round(s.rangeKm).toLocaleString("en-US") + " km · " + window.SatVisible.conditions(s);
-          $("#liveGroundStatus").textContent = $("#liveSkyStatus").textContent.replace("chart", "sky");
-          var bodyPick = bodies.filter(function (b) { return b.id === celestialSelected; })[0];
-          $("#liveGroundSelection").textContent = bodyPick ? bodyPick.name + " · " + celestialReadout(bodyPick) : $("#liveSkyReadout").textContent;
-          $("#liveGroundFind").disabled = s.el < 0 && !bodyPick;
-        } else { liveSkyData = null; renderCelestial("liveCelestial", null, now, celestialSelected); }
-      }
-      else Dr.worldmap(canvas, contentWidth(), drawing);
+      scene = { s: s, drawing: drawing, now: now }; drawScene();
       if (obs) {
         var c = passCache[n] && passesCurrent(n, 2) ? passesFor(n, 2)[0] : null;
         $("#liveNext").innerHTML = c ? '<p class="note"><b>' + (c.aos <= now ? "Pass in progress – LOS in " + F.countdown(c.los - now) : "Next pass in " + F.countdown(c.aos - now)) + "</b> (max " + Math.round(c.maxEl) + "°, " + clk(c.aos) + ') · <a class="link" href="#/pass/' + n + "/" + Math.round(c.aos) + '">details</a></p>' : '<p class="note">Computing next pass…</p>';
       }
     }
-    view.resize = tick; view.tick = tick; selectView(mode); every(1000, tick);
+    view.resize = drawScene; view.tick = tick; $$(".canvaswrap", main).forEach(watchSize); selectView(mode); every(1000, tick);
     if (obs) { var token = view.token; setTimeout(function () { if (token === view.token) { computePasses(n, 2); } }, 30); }
   };
 
@@ -816,7 +903,7 @@
       '<div class="field"><label for="visibleLon">Longitude (°, E+)</label><input class="inp" id="visibleLon" type="number" min="-180" max="180" step="any" required value="' + initial.lon + '"></div>' +
       '<div class="field"><label for="visibleAlt">Elevation (m)</label><input class="inp" id="visibleAlt" type="number" min="-500" max="9000" step="any" value="' + initial.alt + '"></div></div>' +
       '<div class="actions"><button class="btn primary" type="submit">Use this point</button></div><p class="note" id="visiblePointMsg" role="status">This point applies to Visible Now; your saved location stays the same.</p></form></details></section>' +
-      '<div id="visibleResults" hidden><section class="card"><div class="fields f3">' +
+      '<div id="visibleResults" class="visible-dashboard" hidden><section class="card tracker-visual"><div class="fields f3">' +
       '<div class="field"><label for="visibleMinEl">Minimum elevation</label><select class="inp" id="visibleMinEl">' + [0, 10, 20, 30, 45, 60].map(function (v) { return '<option value="' + v + '"' + (v === minEl ? " selected" : "") + '>' + (v ? v + "°" : "Horizon (0°)") + '</option>'; }).join("") + '</select></div>' +
       '<div class="field"><label for="visibleDirection">Look toward</label><select class="inp" id="visibleDirection">' + ["all"].concat(V.DIRECTIONS).map(function (v) { return '<option value="' + v + '"' + (v === dir ? " selected" : "") + '>' + (v === "all" ? "All directions" : v) + '</option>'; }).join("") + '</select></div>' +
       '<div class="field"><label for="visibleOptical">Viewing conditions</label><select class="inp" id="visibleOptical"><option value="all">All above horizon</option><option value="optical"' + (S.load("visibleOptical", false) ? " selected" : "") + '>Sunlit + dark sky</option></select></div></div>' +
@@ -830,7 +917,7 @@
       '<div id="visiblePanelground" role="tabpanel" aria-labelledby="visibleTabground" hidden>' + groundHtml("visibleGround") + '<p class="note" id="visibleGroundSelection"></p></div><div id="visibleSkyReferences" hidden>' + celestialHtml("visibleCelestial") + '</div>' +
       '<label class="check"><input type="checkbox" id="visibleLabels"> Show satellite names in all views</label>' +
       '<p class="note" id="visibleLegend"></p></section>' +
-      '<section class="card"><h2>Above your horizon</h2><p class="note">Highest elevation first. Bearings are degrees clockwise from <b>true north</b>; a magnetic compass may differ. Elevation: 0° at the horizon, 90° directly overhead.</p>' +
+      '<section class="card visible-list-panel"><h2>Above your horizon</h2><p class="note">Highest elevation first. Bearings are degrees clockwise from <b>true north</b>; a magnetic compass may differ. Elevation: 0° at the horizon, 90° directly overhead.</p>' +
       '<p class="banner" id="visibleEmpty" hidden></p><div id="visibleList"></div></section></div>' +
       '<p class="disclaimer" id="visibleCatalog"></p><p class="disclaimer">Above the horizon and sunlit does not guarantee naked-eye visibility. Brightness, cloud and terrain are not modeled. Predictions use SGP4 and public TLEs; old elements reduce accuracy. This page covers the app’s catalog and imported or looked-up satellites, not every object in orbit.</p>';
     var obs = point ? P.makeObserver(point.lat, point.lon, point.alt) : null;
@@ -911,6 +998,29 @@
         $(".visible-age", el).classList.toggle("bad-txt", !!stale);
       });
     }
+    var scene = null;
+    function drawScene() {
+      if (!scene || !obs) return;
+      var rows = scene.rows, drawing = scene.drawing, now = scene.now, options = scene.options, sunEl = scene.sunEl, pick = scene.pick, showLabels = scene.showLabels;
+      var panel = $("#visiblePanel" + mode), w = panelWidth(panel.querySelector(".canvaswrap") || panel);
+      if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#visibleGlobe")); globe.update(drawing, w); }
+      else if (mode === "sky" || mode === "ground") {
+        var bodies = renderCelestial("visibleCelestial", point, now, celestialSelected);
+        var skyItems = rows.map(function (r) {
+          return { id: r.norad, name: nameOf(r.norad), az: r.state.az, el: r.state.el, selected: r.norad === selected, color: r.state.sunlit && r.state.sunEl < P.VISIBLE_SUN_EL ? "#fbbf24" : "#22d3ee" };
+        }).concat(bodies);
+        if (mode === "ground") {
+          if (!ground) ground = window.SatGround.create($("#visibleGround"), function (hit) { if (hit.kind === "satellite" || !hit.kind) { selected = hit.id; celestialSelected = null; } else celestialSelected = hit.id; tick(); });
+          ground.update(skyItems, { minEl: options.minEl, labels: showLabels, sunEl: sunEl });
+        } else skyChart = window.SatSky.draw($("#visibleSkyMap"), w, skyItems, { minEl: options.minEl, labels: showLabels });
+        var bodyPick = bodies.filter(function (b) { return b.id === celestialSelected; })[0];
+        $("#visibleSkySelection").textContent = bodyPick ? bodyPick.name + " · " + celestialReadout(bodyPick) : pick ? nameOf(pick.norad) + " · Bearing " + az(pick.state.az) + " · Elevation " + fmt(pick.state.el, 1) + "° · Range " + Math.round(pick.state.rangeKm).toLocaleString("en-US") + " km · " + V.conditions(pick.state) : "Tap a marker or choose a satellite in the list below for its name and readouts.";
+        $("#visibleGroundSelection").textContent = $("#visibleSkySelection").textContent;
+        $("#visibleGroundFind").disabled = !bodyPick && !pick;
+        $("#visibleGroundStatus").textContent = rows.length + " satellites above the horizon match your filters. Turn to look in any direction.";
+      }
+      else Dr.worldmap($("#visibleMap"), w, drawing);
+    }
     function tick() {
       var now = Date.now();
       if (!obs) { $("#visibleCatalog").textContent = (S.allLoaded() ? "Catalog ready." : "Loading catalog categories…"); return; }
@@ -929,29 +1039,12 @@
       var drawing = { obs: { lat: point.lat, lon: point.lon }, centerObs: true, compressAltitudes: !$("#visibleTrueScale").checked, sats: rows.filter(function (r) { return r.norad !== selected; }).map(function (r) {
         return { sat: r.state, label: showLabels ? nameOf(r.norad) : "", color: r.state.sunlit && r.state.sunEl < P.VISIBLE_SUN_EL ? "#fbbf24" : "#22d3ee" };
       }), sat: pick ? pick.state : null, label: pick ? nameOf(pick.norad) : "" };
-      var panel = $("#visiblePanel" + mode), w = panel.clientWidth || contentWidth();
-      if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#visibleGlobe")); globe.update(drawing, w); }
-      else if (mode === "sky" || mode === "ground") {
-        var bodies = renderCelestial("visibleCelestial", point, now, celestialSelected);
-        var skyItems = rows.map(function (r) {
-          return { id: r.norad, name: nameOf(r.norad), az: r.state.az, el: r.state.el, selected: r.norad === selected, color: r.state.sunlit && r.state.sunEl < P.VISIBLE_SUN_EL ? "#fbbf24" : "#22d3ee" };
-        }).concat(bodies);
-        if (mode === "ground") {
-          if (!ground) ground = window.SatGround.create($("#visibleGround"), function (hit) { if (hit.kind === "satellite" || !hit.kind) { selected = hit.id; celestialSelected = null; } else celestialSelected = hit.id; tick(); });
-          ground.update(skyItems, { minEl: options.minEl, labels: showLabels, sunEl: sunEl });
-        } else skyChart = window.SatSky.draw($("#visibleSkyMap"), w, skyItems, { minEl: options.minEl, labels: showLabels });
-        var bodyPick = bodies.filter(function (b) { return b.id === celestialSelected; })[0];
-        $("#visibleSkySelection").textContent = bodyPick ? bodyPick.name + " · " + celestialReadout(bodyPick) : pick ? nameOf(pick.norad) + " · Bearing " + az(pick.state.az) + " · Elevation " + fmt(pick.state.el, 1) + "° · Range " + Math.round(pick.state.rangeKm).toLocaleString("en-US") + " km · " + V.conditions(pick.state) : "Tap a marker or choose a satellite in the list below for its name and readouts.";
-        $("#visibleGroundSelection").textContent = $("#visibleSkySelection").textContent;
-        $("#visibleGroundFind").disabled = !bodyPick && !pick;
-        $("#visibleGroundStatus").textContent = rows.length + " satellites above the horizon match your filters. Turn to look in any direction.";
-      }
-      else Dr.worldmap($("#visibleMap"), w, drawing);
+      scene = { rows: rows, drawing: drawing, now: now, options: options, sunEl: sunEl, pick: pick, showLabels: showLabels }; drawScene();
       $("#visibleCatalog").textContent = result.total + " catalog satellites checked" + (result.skipped ? " · " + result.skipped + " with unusable orbital positions skipped" : "") + ". " + (S.allLoaded() ? "Includes all catalog categories and your imports/lookups." : "Some catalog categories are still loading or unavailable; results may be incomplete.");
     }
     bindGround("visibleGround", function () { return ground; });
     view.dispose = function () { if (globe) globe.dispose(); if (ground) ground.dispose(); };
-    view.tick = tick; view.resize = tick; updateObserver(); chooseMode(mode); every(1000, tick);
+    view.tick = tick; view.resize = drawScene; $$(".canvaswrap", main).forEach(watchSize); updateObserver(); chooseMode(mode); every(1000, tick);
     if (!S.allLoaded()) S.ensureAll().then(function () { if (token === view.token) tick(); });
   };
 
@@ -988,9 +1081,9 @@
     var info = radarInfoOf(n), m = info.mission, e = entry(n), sat = satObj(n), token = view.token, fHz = m.centerFreqMHz != null ? m.centerFreqMHz * 1e6 : null;
     main.innerHTML = '<div class="banner warn">⚠️ <b>Radar frequency – informational only.</b> The values below are the satellite’s <i>nominal radar carrier</i> from the cited sources; they are <b>not for reception</b> (SAR data is downlinked in other bands) and individual modes differ. Where a value could not be verified it says so.</div>' +
       '<div class="toolbar"><select class="inp" id="dSat" aria-label="Satellite">' + dopplerSatOptions(n, R.CURATED.filter(function (c) { return R.radios(c.norad).length; }).map(function (c) { return c.norad; })) + "</select></div>" +
-      '<section class="card" id="radarCard"><h2>' + esc(longName(n)) + ' <span class="muted">· SAR radar</span></h2>' + radarPanelHtml(info) + "</section>" +
+      '<section class="card radar-info" id="radarCard"><h2>' + esc(longName(n)) + ' <span class="muted">· SAR radar</span></h2>' + radarPanelHtml(info) + "</section>" +
       '<section class="card"><h2>Now</h2><div id="rLive"></div>' + (fHz != null ? '<p class="note" id="rLabel">' + esc(D.RADAR_DOPPLER_LABEL) + "</p>" : "") + "</section>" +
-      '<section class="card"><h2>Across a pass</h2><div id="dPassSel"></div><div id="rGeo"></div><div class="tblwrap" id="dTbl"></div></section>';
+      '<section class="card doppler-series"><h2>Across a pass</h2><div id="dPassSel"></div><div id="rGeo"></div><div class="tblwrap" id="dTbl"></div></section>';
     $("#dSat").onchange = function () { go("#/doppler/" + this.value); };
     function cell(l, v, cls) { return '<div class="' + (cls || "") + '"><small>' + l + "</small><b>" + v + "</b></div>"; }
     function liveTick() {
@@ -1054,7 +1147,7 @@
       (radio.kind === "linear" ? '<div class="field"><label for="dFrac">Position in the passband: <b id="dFracTxt"></b> <span class="muted">(0 % = lowest downlink frequency)</span></label><input type="range" id="dFrac" class="slider" min="0" max="1000" value="' + Math.round(frac * 1000) + '"></div>' : "") +
       '<div id="dNominal" class="note"></div><div id="dLive"></div>' +
       '<p class="note">' + esc(radio.note || "") + (radio.tone ? " · CTCSS tone " + radio.tone + " Hz" : "") + "</p>" + (liveRadios.length ? "" : (S.sources.readiness("satnogs").ready ? '<p class="note">Optional: <a class="link" href="#/settings">fetch live transmitters from SatNOGS</a> (Setup → Data sources); they are added below the bundled table, never replacing it.</p>' : "")) + "</section>" +
-      '<section class="card"><h2>Doppler across a pass</h2><div id="dPassSel"></div><div class="tblwrap" id="dTbl"></div>' +
+      '<section class="card doppler-series"><h2>Doppler across a pass</h2><div id="dPassSel"></div><div class="tblwrap" id="dTbl"></div>' +
       '<p class="note">First-order Doppler: Rx = f<sub>down</sub>·(1 − rr/c); to be heard on f<sub>up</sub> you transmit f<sub>up</sub>·(1 + rr/c). rr = range rate (+ receding). Positions use a TLE, so the shift is accurate to ~tens of Hz when the TLE is fresh. Times in ' + F.tzLabel(Date.now(), utc()) + ".</p></section>";
     $("#dSat").onchange = function () { go("#/doppler/" + this.value); };
     if ($("#dRadio")) $("#dRadio").onchange = function () { S.save("dopRadio:" + n, Number(this.value)); rerender("doppler", a); };
@@ -1113,10 +1206,10 @@
     setTitle("Satellites");
     var q = "", mode = S.load("satMode", "curated"), token = view.token, st = dataStatus(), now = Date.now();
     if (!Cat.validMode(mode)) mode = "curated";
-    main.innerHTML = '<section class="card"><h2>Orbital data (TLE)</h2><div class="note" style="margin-top:0" id="dsText"></div><div id="dsMsg"></div>' +
+    main.innerHTML = '<section class="card catalog-tools"><h2>Orbital data (TLE)</h2><div class="note" style="margin-top:0" id="dsText"></div><div id="dsMsg"></div>' +
       '<div class="actions"><button class="btn primary" id="refBtn">⟳ Refresh element sets</button><button class="btn" id="refCatBtn" hidden></button></div><p class="note" id="refNote"></p><p class="note" id="catNote"></p>' +
       '<details class="more" id="importBox"><summary>Import a TLE / OMM file or paste TLEs</summary><div class="actions"><label class="btn" id="fileLbl" for="fileIn">📂 Import a TLE / OMM file…</label><input type="file" id="fileIn" accept=".txt,.tle,.3le,.json,.xml,.csv,text/plain,application/json" hidden></div><textarea class="inp" id="pasteTa" spellcheck="false" placeholder="ISS (ZARYA)\n1 25544U 98067A   ...\n2 25544  51.6400 ..."></textarea><div class="actions"><button class="btn" id="pasteBtn">Import pasted TLEs</button></div><p class="note">Works with no network and no data source: a TLE/3LE text file, or OMM JSON (e.g. downloaded from your own Space-Track account – SatPass keeps it only in this browser). Get TLEs from <a class="link" href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noopener">celestrak.org</a> or <a class="link" href="https://www.amsat.org/tle/current/nasa.all" target="_blank" rel="noopener">AMSAT</a> on another device.</p></details></section>' +
-      '<div class="toolbar"><input class="inp" id="q" type="search" placeholder="Search name, operator or NORAD id" aria-label="Search satellites" autocomplete="off"></div><div class="chips" id="modeSeg" role="group" aria-label="Category"></div><div id="satList"></div>';
+      '<div class="catalog-browser"><div class="toolbar"><input class="inp" id="q" type="search" placeholder="Search name, operator or NORAD id" aria-label="Search satellites" autocomplete="off"></div><div class="chips" id="modeSeg" role="group" aria-label="Category"></div><div id="satList"></div></div>';
     function modeList() {
       var l = [["curated", "Curated", null], ["favs", "★ Favs", S.settings.favs.length]];
       Cat.CATEGORIES.forEach(function (c) { l.push([c.id, c.label, S.members(c.id).length]); });
@@ -1190,7 +1283,7 @@
       if (ql) rows = rows.filter(function (r) { return satHaystack(r.n).indexOf(ql) >= 0; });
       var noTle = [];
       if (cat && cat.id === "sar") Sar.noPublicTle().forEach(function (x) { if (!ql || (x.name + " " + x.mission.operator).toLowerCase().indexOf(ql) >= 0) noTle.push(x); });
-      $("#satList").innerHTML = '<section class="card" style="padding:4px 10px">' + (rows.length || noTle.length ? rows.map(function (r) {
+      $("#satList").innerHTML = '<section class="card catalog-results" style="padding:4px 10px">' + (rows.length || noTle.length ? rows.map(function (r) {
         var e = entry(r.n), age = e ? Tle.ageDays(e, now) : 0, fav = S.isFav(r.n);
         return '<div class="sat"><button class="star' + (fav ? " on" : "") + '" data-n="' + r.n + '" aria-label="' + (fav ? "Remove favorite " : "Add favorite ") + esc(r.label) + '" aria-pressed="' + fav + '">' + (fav ? "★" : "☆") + "</button>" +
           '<button class="nm" data-open="' + r.n + '"><b>' + esc(r.label) + "</b><span>NORAD " + r.n + (r.sub ? " · " + esc(r.sub) : "") + (R.radios(r.n).length ? " · radio" : radarInfoOf(r.n) ? " · radar" : "") + "</span></button>" +
@@ -1233,13 +1326,13 @@
     main.innerHTML = "";
     main.appendChild(locationCard(function () {}));
     main.appendChild(dataSourcesCard());
-    var s = S.settings, sec = document.createElement("div");
-    sec.innerHTML = '<section class="card"><h2>Time &amp; display</h2><div class="toolbar"><span>Show times in</span><span class="seg" id="tzSeg"><button data-v="local" class="' + (!s.utc ? "on" : "") + '">Local (' + F.tzLabel(Date.now(), false) + ')</button><button data-v="utc" class="' + (s.utc ? "on" : "") + '">UTC</button></span></div>' +
+    var s = S.settings, sec = document.createElement("div"); sec.className = "settings-extra";
+    sec.innerHTML = '<section class="card settings-display"><h2>Time &amp; display</h2><div class="toolbar"><span>Show times in</span><span class="seg" id="tzSeg"><button data-v="local" class="' + (!s.utc ? "on" : "") + '">Local (' + F.tzLabel(Date.now(), false) + ')</button><button data-v="utc" class="' + (s.utc ? "on" : "") + '">UTC</button></span></div>' +
       '<div class="toolbar"><span>Default reminder / calendar alert</span><select class="inp" id="leadSel" style="flex:0 1 130px">' + [2, 5, 10, 15, 30].map(function (m) { return '<option value="' + m + '"' + (m === s.leadMin ? " selected" : "") + ">" + m + " min before</option>"; }).join("") + "</select></div></section>" +
-      '<section class="card"><h2>Alerts</h2><p class="note" style="margin-top:0">The <b>Next pass</b> banner at the top counts down to your next favorite pass whenever the app is open. Set a per-pass reminder from a pass’s detail page.</p>' +
+      '<section class="card settings-alerts"><h2>Alerts</h2><p class="note" style="margin-top:0">The <b>Next pass</b> banner at the top counts down to your next favorite pass whenever the app is open. Set a per-pass reminder from a pass’s detail page.</p>' +
       '<div class="toolbar"><button class="btn" id="notifBtn"></button></div><p class="note" id="notifNote"></p><p class="note">Reminders: <span id="remCount"></span></p></section>' +
       '<section class="card" id="installCard"><h2>Install</h2><div id="installBody"></div></section>' +
-      '<section class="card"><h2>About &amp; accuracy</h2><div class="note" style="margin-top:0"><p><b>SatPass ' + APP_VERSION + '</b> <span id="swVer" class="muted"></span></p>' +
+      '<section class="card settings-about"><h2>About &amp; accuracy</h2><div class="note" style="margin-top:0"><p><b>SatPass ' + APP_VERSION + '</b> <span id="swVer" class="muted"></span></p>' +
       "<p><b>Accuracy:</b> orbits come from public two-line element sets (TLEs) propagated with SGP4/SDP4 (<a class='link' href='https://github.com/shashwatak/satellite-js' target='_blank' rel='noopener'>satellite.js</a>, MIT). A fresh LEO TLE is good to roughly a kilometre or two, which is a few seconds of timing; the error grows every day (ISS: up to ~10 km/day after reboosts or manoeuvres). Element sets older than " + Tle.STALE_DAYS + " days are flagged. Always confirm important passes with a live source.</p>" +
       "<p><b>Approximations:</b> (1) elevations are <i>geometric</i> – no atmospheric refraction (~0.5° at the horizon), so real AOS/LOS happen slightly earlier/later; (2) sunlit/eclipse uses a simple <i>cylindrical Earth shadow</i> (spherical Earth, no penumbra or atmosphere) – transitions are good to a few seconds; (3) a pass is flagged <i>visible</i> when the satellite is sunlit, above your horizon and the sun is below <b>−6°</b> (civil twilight) – a rule of thumb, since brightness, sky glow, weather and terrain also matter; only ISS/Tiangong get the tag. Sun position uses a low-precision formula (~0.01°).</p>" +
       "<p><b>Sky references:</b> Sky View uses locally bundled <a class='link' href='https://github.com/cosinekitty/astronomy' target='_blank' rel='noopener'>Astronomy Engine 2.1.19</a> by Don Cross (<a class='link' href='js/vendor/astronomy-LICENSE.md' target='_blank' rel='noopener'>MIT license</a>). Positions include the observing location and omit atmospheric refraction. Polaris uses bundled J2000 coordinates from SIMBAD with precession/nutation calculated locally. Above-horizon positions do not guarantee naked-eye visibility.</p>" +
@@ -1252,6 +1345,11 @@
       '<p>Everything runs on your device; your location is never uploaded.</p></div>' +
       '<div class="actions"><button class="btn" id="resetBtn">Reset favorites &amp; settings</button></div></section>';
     main.appendChild(sec);
+    var personal = document.createElement("div"), basic = document.createElement("div");
+    personal.className = "settings-personal"; basic.className = "panel-stack settings-basic";
+    ["#locCard", ".settings-display", ".settings-alerts", "#installCard"].forEach(function (sel) { basic.appendChild($(sel)); });
+    personal.appendChild(basic); personal.appendChild($(".settings-about"));
+    main.insertBefore(personal, $("#srcCard")); sec.remove();
     $$("#tzSeg button").forEach(function (b) { b.onclick = function () { S.set({ utc: b.dataset.v === "utc" }); syncTz(); }; });
     $("#leadSel").onchange = function () { S.set({ leadMin: Number(this.value) }); };
     var nb = $("#notifBtn");
@@ -1278,6 +1376,7 @@
   /* ---------- install ---------- */
   function renderInstallCard() {
     var b = $("#installBody"); if (!b) return;
+    if (isDesktop()) { b.innerHTML = '<p class="note" style="margin-top:0">SatPass desktop app ✔ · All app files are included for offline use, including the first launch. Install a newer desktop package to update the app; use Data sources above to refresh satellite data while online.</p><p class="note">Desktop settings are stored separately from your browser. Enter your observing location here. Stored credentials can be moved with the encrypted backup export/import.</p>'; return; }
     if (isStandalone()) { b.innerHTML = '<p class="note" style="margin-top:0">Installed as an app ✔</p>'; return; }
     b.innerHTML = '<button class="btn primary block" id="aboutInstall">Install SatPass</button><p class="note">iPhone/iPad (Safari): Share → Add to Home Screen. Android (Chrome): ⋮ → Install app / Add to Home screen. Desktop Chrome/Edge: install icon in the address bar.</p>';
     $("#aboutInstall").onclick = install.prompt;
@@ -1322,13 +1421,14 @@
   }
   document.addEventListener("DOMContentLoaded", function () {
     main = $("#app"); titleEl = $("#title");
+    $(".skip-link").onclick = function (event) { event.preventDefault(); main.focus(); main.scrollIntoView({ block: "start" }); };
     S.init();
     $("#themeBtn").onclick = function () { var t = S.settings.theme || "auto"; S.set({ theme: t === "auto" ? "dark" : t === "dark" ? "light" : "auto" }); applyTheme(); if (view.tick) view.tick(); };
     $("#tzBtn").onclick = function () { S.set({ utc: !utc() }); syncTz(); };
     $("#nextbar").onclick = function () { var b = $("#nextbar"); if (b.dataset.n) go("#/pass/" + b.dataset.n + "/" + b.dataset.aos); };
     applyTheme(); $("#tzBtn").textContent = utc() ? "UTC" : "Local";
     window.addEventListener("hashchange", route);
-    window.addEventListener("resize", function () { if (view.resize) view.resize(); });
+    window.addEventListener("resize", queueResize);
     window.addEventListener("online", autoRefresh);
     route(); install.init(); refreshNextBar(); movedBar();
     // Auto-lock (1.3.0): an encrypted vault forgets its decrypted credentials after idle time / while the page is hidden.
@@ -1351,7 +1451,7 @@
     setInterval(function () { updateNextBar(); checkReminders(); }, 1000);
     setTimeout(function () { S.ensureAll(); }, 1200);   // lazy category snapshots: load in the background once the first view is up (precached, so this also works offline)
     setTimeout(autoRefresh, 2500);
-    if ("serviceWorker" in navigator && location.protocol !== "file:") {
+    if (!isDesktop() && "serviceWorker" in navigator && location.protocol !== "file:") {
       navigator.serviceWorker.register("sw.js").then(function (reg) {
         function offerUpdate(w) { $("#update-bar").hidden = false; $("#update-btn").onclick = function () { w.postMessage("skipWaiting"); }; }
         // a new version may already be installed and waiting (e.g. found during a previous visit that was closed before the bar was shown)

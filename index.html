@@ -19,16 +19,20 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+<a class="skip-link" href="#app">Skip to content</a>
 <header class="top">
   <h1 id="title">SatPass</h1>
   <button id="tzBtn" class="pill" aria-label="Toggle local time / UTC" title="Toggle local time / UTC">Local</button>
   <button id="themeBtn" class="hb" aria-label="Theme">🌓</button>
 </header>
+<div class="announcements">
 <div id="moved-bar" class="update moved" hidden></div>
 <div id="update-bar" class="update" hidden>A new version is ready. <button id="update-btn" class="btn sm primary">Update</button></div>
 <div id="nextbar" class="nextbar" hidden></div>
-<main id="app"><noscript>SatPass needs JavaScript.</noscript></main>
+</div>
+<main id="app" tabindex="-1"><noscript>SatPass needs JavaScript.</noscript></main>
 <nav id="tabs" class="tabs" aria-label="Sections">
+  <div class="nav-brand" aria-hidden="true">🛰️ SatPass</div>
   <a href="#/passes" data-tab="passes"><span>🛰️</span>Passes</a>
   <a href="#/live" data-tab="live"><span>🌍</span>Live</a>
   <a href="#/visible" data-tab="visible"><span>👀</span>Visible Now</a>

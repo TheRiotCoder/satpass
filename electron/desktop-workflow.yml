@@ -1,0 +1,68 @@
+name: Desktop packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'electron/**'
+      - 'package*.json'
+      - 'index.html'
+      - 'js/**'
+      - 'css/**'
+      - 'data/**'
+      - 'icons/**'
+      - 'tests/desktop*'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'electron/**'
+      - 'package*.json'
+      - 'index.html'
+      - 'js/**'
+      - 'css/**'
+      - 'data/**'
+      - 'icons/**'
+      - 'tests/desktop*'
+      - '.github/workflows/desktop.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux
+          - os: windows-latest
+            target: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-fund
+      - run: npm run test:desktop
+      - run: npm run dist:${{ matrix.target }}
+      - name: Smoke test packaged Linux app offline
+        if: runner.os == 'Linux'
+        run: npm run test:desktop:smoke
+        env:
+          DESKTOP_BINARY: release/linux-unpacked/satpass
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: SatPass-${{ matrix.target }}-x64
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.exe
+            release/*.blockmap

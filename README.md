@@ -10,6 +10,8 @@ Predictions use public orbital elements (TLEs) from [CelesTrak](https://celestra
 
 ## Features
 
+- **Desktop app (Linux/Windows)**: Electron packaging in this repository loads all assets directly from the installed application, including offline on first launch. Linux builds produce AppImage and `.deb` packages; Windows builds produce an NSIS installer. Settings persist separately from the browser, and application updates use a newer desktop installer. See [desktop installation, development and builds](electron/README.md).
+
 - **3D Sky**: fourth tab on Live Tracker and Visible Now, using locally bundled [Three.js 0.180.0](https://github.com/mrdoob/three.js/tree/r180) under MIT ([license](js/vendor/three-LICENSE.txt), [provenance](js/vendor/three-README.md)). Stand at the active saved/custom observing point and drag to look around a perspective sky, including directly overhead. Scroll/pinch or use buttons to zoom; arrow keys turn, +/− zoom, Home faces north. Compass buttons, elevation grid, minimum-elevation ring and a live camera bearing help orient the view. Tap a marker to identify it; **Find selected** points the camera at a selected satellite or reference object. Uses the same satellite filters and Moon/planet/Polaris toggle as the chart. True-north bearings and geometric horizon; a decorative tree silhouette separates sky and ground in every direction. Trees, symbols and sky colors are illustrative; actual terrain, cloud, other stars, constellations and device orientation tracking are not modeled. Requires WebGL 2; if unavailable, the Sky View chart remains available. Rendering pauses off-tab/when hidden and releases GPU resources on leaving the page. Both Three.js modules are precached for offline use.
 
 - **Location**: GPS button, manual lat/lon/elevation, **Maidenhead grid** entry and display (type a grid to get lat/lon, or lat/lon to get the grid; 4/6/8/10 characters). Saved in `localStorage`. Local-time / UTC toggle in the header.
@@ -26,6 +28,29 @@ Predictions use public orbital elements (TLEs) from [CelesTrak](https://celestra
 - **Offline**: app shell, bundled TLE snapshots for **every category** and the map are precached. First launch offline works from the snapshots; cached TLEs are used afterwards.
 
 ## Install
+
+Two executable helpers are available in the project root:
+
+```sh
+./start-web.sh                 # Python web server at http://127.0.0.1:8000/
+./build-install-mint.sh        # Build and install the Linux Mint desktop app
+```
+
+Both work from any working directory. The server stays in the foreground (Ctrl+C
+to stop), reuses a matching running server, and accepts another port, such as
+`./start-web.sh 8001`. The Mint script installs locked npm build dependencies,
+checks the desktop configuration, builds the Linux packages, then asks for sudo
+to install the `.deb`. Run it **without sudo**. It closes your installed SatPass
+copy before installation and preserves its settings; reopen it from the menu or
+with `satpass`. Use `--build-only` to skip closing/installing. Python 3 is required
+for the web server; Node 24 LTS (minimum 22.12) and npm are required for building.
+Existing user Node runtimes are detected, including the runtime on the original
+Mint development computer; `NODE_BIN=/path/to/node` selects another explicitly.
+Downloading build dependencies requires internet when they are not cached.
+
+**Linux desktop / Windows desktop**
+
+Use the packaged installers or build from this repository with Node 24: `npm ci`, then `npm run dist:linux` on Linux or `npm run dist:win` on Windows. The desktop app opens directly without a manually started web server. [Desktop instructions](electron/README.md) cover Linux Mint installation, separate saved settings, offline use, and the GitHub Actions build workflow.
 
 **iPhone / iPad (Safari)**
 1. Open the app URL in **Safari** (not an in-app browser).
@@ -174,6 +199,9 @@ Polaris uses the bundled Astronomy Engine `Star1` definition with [SIMBAD’s al
 - **LOS (or AOS) not found within the limit:** the pass is kept, the time is a lower bound and `truncated = true` (`aosTruncated` for the AOS side). The app shows "LOS ≥" on the list and a warning on the detail page.
 
 ## Release notes
+
+- **1.5.0** – Adaptive desktop/tablet/phone dashboards, adjacent pass previews, responsive canvas sizing and browser-assisted desktop location. See [layout implementation and review](docs/ADAPTIVE_LAYOUT.md).
+- **1.4.0** – Electron desktop app for Linux, with AppImage/Debian packages and a Windows NSIS build configuration/workflow. Bundled assets work offline from first launch; browser/PWA deployment remains available.
 
 - **1.3.13** – Decorative tree silhouettes give the 3D Sky horizon a clear edge, with distant and nearby layers that rotate with the view.
 

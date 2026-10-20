@@ -1,0 +1,57 @@
+{
+  "name": "satpass",
+  "version": "1.5.0",
+  "private": true,
+  "description": "Offline satellite pass predictor and sky tracker",
+  "author": "SatPass contributors",
+  "license": "MIT",
+  "homepage": "https://github.com/guardst7/satpass",
+  "repository": { "type": "git", "url": "https://github.com/guardst7/satpass.git" },
+  "main": "electron/main.cjs",
+  "desktopName": "satpass.desktop",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "start": "electron .",
+    "test": "node tests/run-all.js",
+    "test:responsive": "node tests/responsive-smoke.cjs",
+    "test:desktop": "node tests/desktop.test.js",
+    "test:desktop:smoke": "node tests/desktop-smoke.cjs",
+    "pack:desktop": "electron-builder --dir --publish never",
+    "dist:linux": "electron-builder --linux AppImage deb --x64 --publish never",
+    "dist:win": "electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "io.github.guardst7.satpass",
+    "productName": "SatPass",
+    "executableName": "satpass",
+    "asar": true,
+    "directories": { "output": "release" },
+    "artifactName": "SatPass-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "index.html", "manifest.webmanifest", "LICENSE", "package.json",
+      "css/**/*", "js/**/*", "data/**/*", "icons/**/*",
+      "electron/main.cjs", "electron/policy.cjs", "electron/preload.cjs", "electron/location.cjs"
+    ],
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "icons/icon-512.png",
+      "category": "Education",
+      "syncDesktopName": true,
+      "maintainer": "SatPass contributors"
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "icons/icon-512.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

@@ -4,8 +4,10 @@
   var F = window.SatFmt;
   function css(name, fallback) { var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fallback; }
   function setup(canvas, w, h) {
+    w = Math.max(1, Number(w) || canvas.parentElement.clientWidth || 1);
+    h = Math.max(1, Number(h) || w);
     var dpr = Math.min(window.devicePixelRatio || 1, 3);
-    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); canvas.style.width = w + "px"; canvas.style.height = h + "px";
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); canvas.style.width = w + "px"; canvas.style.height = "auto";
     var ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); return ctx;
   }
   /* ---------- sky plot ----------

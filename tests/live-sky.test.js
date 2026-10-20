@@ -23,9 +23,9 @@ function fixture(hasLocation, initialState, validSat = true, bodies = []) {
     window:{SatGround:{create:(host,pick)=>{ground.pick=pick;return ground;}},SatVisible:V,SatCelestial:{positions:()=>bodies},SatSky:{pick:Sky.pick,draw:(canvas,w,items,options)=>{
       skyDraws.push({items,options,points:items.map(s=>Sky.project(s.az,s.el,w)).filter(Boolean)});
       return {size:w,hits:items.map(s=>({...s,...Sky.project(s.az,s.el,w)}))};
-    }}}, main:{innerHTML:''},view:{token:1},passCache:{},$,Date,
+    }}}, main:{innerHTML:''},view:{token:1},passCache:{},$,$$:()=>[],watchSize:()=>()=>{},Date,
     entry:()=>({epochMs:0}),satObj:()=>validSat?{}:null,satSelectHtml:()=>'',setTitle:()=>{},radarInfoOf:()=>null,
-    observer:()=>obs,contentWidth:()=>320,nameOf:n=>'Satellite '+n,esc:String,fmt:(n,d)=>n.toFixed(d),az:n=>Math.round(n)+'° E',
+    observer:()=>obs,panelWidth:()=>320,nameOf:n=>'Satellite '+n,esc:String,fmt:(n,d)=>n.toFixed(d),az:n=>Math.round(n)+'° E',
     go:()=>{},refreshNextBar:()=>{},every:()=>{},setTimeout:()=>{},computePasses:()=>{},passesCurrent:()=>false
   };
   vm.runInNewContext(route,context);context.ROUTES.live([25544]);
