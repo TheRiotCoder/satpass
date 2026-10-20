@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.2 – Visible Now visualization layout
+
+- Keeps the visualization in the larger left column on desktop and tablet, with a 280–400 px satellite list on the right. Scopes the Live Tracker wide-screen placement to its own dashboard so it cannot move the Visible Now visualization into the smaller column.
+- Allows long satellite names to wrap beside their Live links. Narrow screens retain a single column with the visualization before the satellite list.
+
+## 1.5.1 – Expand tracker visualizations
+
+- Adds an overlay expand/restore control to each 2D Map, 3D Globe, Sky View and 3D Sky on Live Tracker and Visible Now. Expanded views use the space around the page header and navigation; tabs, keyboard/touch controls and Esc-to-restore remain available.
+- Reuses existing canvases and renderers, preserving satellite/filter selection and camera direction. Maps and sky charts fit without distortion; globe and 3D Sky use the available viewport height. Route cleanup restores the dashboard and removes expansion listeners.
+
 ## 1.5.0 – Adaptive dashboard
 
 - Adds executable `start-web.sh` and `build-install-mint.sh` helpers for the local Python server and Linux Mint desktop build/install workflow.

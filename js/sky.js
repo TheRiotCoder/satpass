@@ -17,7 +17,7 @@
   }
   function draw(canvas, width, items, options) {
     options = options || {};
-    var size = Math.max(160, Math.min(Number(width) || 320, 640)), dpr = Math.min(window.devicePixelRatio || 1, 3);
+    var size = Math.max(80, Math.min(Number(width) || 320, options.maxSize || 640)), dpr = Math.min(window.devicePixelRatio || 1, 3);
     canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
     canvas.style.width = size + "px"; canvas.style.height = "auto";
     var ctx = canvas.getContext("2d"), center = size / 2, radius = center - 38, hits = [], labels = [];

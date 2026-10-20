@@ -1,10 +1,10 @@
 /* SatPass service worker (adapted from rf-toolbox) – offline app shell.
    VERSION is the single version string for the app (the About page reads it from the cache name). Bump it on every release. */
-const VERSION = "satpass-v1.5.0";
+const VERSION = "satpass-v1.5.2";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/style.css",
   "js/vendor/satellite.min.js", "js/grid.js", "js/doppler.js", "js/format.js", "js/tle.js", "js/passes.js", "js/ics.js", "js/radio.js", "js/catalog.js", "js/sources.js",
-  "js/biometric.js", "js/store.js", "js/draw.js", "js/globe.js", "js/visible.js", "js/sky.js", "js/celestial.js", "js/ground.js", "js/app.js",
+  "js/biometric.js", "js/store.js", "js/draw.js", "js/globe.js", "js/visible.js", "js/sky.js", "js/celestial.js", "js/ground.js", "js/expand.js", "js/app.js",
   "js/vendor/three.module.min.js", "js/vendor/three.core.min.js", "js/vendor/three-LICENSE.txt",
   "js/vendor/astronomy.browser.min.js", "js/vendor/astronomy-LICENSE.md",
   "data/tle-snapshot.js", "data/world.js", "data/sar.js",

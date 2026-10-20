@@ -30,7 +30,7 @@ const normal = fire(B + "css/style.css");
 ok("SW still serves ordinary same-origin assets (cache-first)", normal.responded === true);
 const nav = fire(B, {}, "GET", "navigate");
 ok("SW still handles navigations (offline shell)", nav.responded === true);
-ok("VERSION constant is satpass-v1.5.0", /const VERSION = "satpass-v1\.5\.0"/.test(src));
+ok("VERSION constant is satpass-v1.5.2", /const VERSION = "satpass-v1\.5\.2"/.test(src));
 
 // ---------- 1.2.1: cache-consistent per version (no overwrite from the network after install), update wiring
 (async () => {

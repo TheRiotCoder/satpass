@@ -86,6 +86,47 @@ async function geometry(label,width,height){
   check('live tracking still updates after resizing',clock!==await ev('document.querySelector("#liveHead").textContent'));
   for(const tab of ['3d','sky','ground']){await ev(`document.querySelector('#tab${tab}').click()`);if(tab==='ground')await until('document.querySelector("#liveGround .ground-message").hidden');for(const [w,h] of [[375,812],[1024,768],[3440,1440]]){await resize(w,h);await geometry('Live '+tab+' '+w,w,h);}}
   await go('visible');for(const tab of ['3d','sky','ground']){await ev(`document.querySelector('#visibleTab${tab}').click()`);if(tab==='ground')await until('document.querySelector("#visibleGround .ground-message").hidden');for(const [w,h] of [[375,812],[1024,768],[3440,1440]]){await resize(w,h);await geometry('Visible '+tab+' '+w,w,h);}}
+  // All eight visualization panels share a reversible expansion lifecycle.
+  async function clickAt(selector,touch=false){
+    const p=await ev(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    if(touch){await send('Emulation.setTouchEmulationEnabled',{enabled:true});await send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[p]});await send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await send('Emulation.setTouchEmulationEnabled',{enabled:false});}
+    else{await send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...p});await send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...p});}
+  }
+  async function escape(){await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});}
+  for(const route of ['live/25544','visible']){
+    const visible=route==='visible',tab=visible?'visibleTab':'tab',panel=visible?'visiblePanel':'panel',host=visible?'visibleGround':'liveGround';
+    await go(route);if(visible){await until('SatStore.allLoaded() && !!document.querySelector(".visible-pick")');await ev('document.querySelector(".visible-pick").click()');}
+    for(const [w,h] of [[1440,900],[375,812],[812,375],[1024,768],[3440,1440]]){
+      await resize(w,h);
+      for(const mode of ['2d','3d','sky','ground']){
+        await ev(`document.querySelector('#${tab+mode}').click()`);
+        if(mode==='ground'){await until(`document.querySelector('#${host} .ground-message')?.hidden`);await ev(`document.querySelector('#${host}E').click()`);await until(`document.querySelector('#${host} .ground-hud').textContent.includes('LOOKING E · 90°')`);}
+        await ev(`document.querySelector('#${panel+mode} .visual-expand').scrollIntoView({block:'center'});window.__visualCanvas=document.querySelector('#${panel+mode} canvas');window.__visualSettings=JSON.stringify(SatStore.settings);window.__visualTimers=__layout.intervals.size;window.__visualHud=document.querySelector('#${host} .ground-hud')?.textContent;window.__visualScroll=scrollY;`);
+        await clickAt('#'+panel+mode+' .visual-expand',w===375&&mode==='2d');
+        await until('!!document.querySelector(".visual-expanded")');
+        await until(`(()=>{const c=document.querySelector('#${panel+mode} canvas'),stage=c.closest('.visual-stage'),area=SatExpand.dimensions(c,${mode==='2d'?2:mode==='sky'?1:0});const dpr=Math.min(devicePixelRatio||1,${mode==='3d'||mode==='ground'?2:3});return Math.abs(c.width/dpr-area.width)<2 && Math.abs(c.height/dpr-${mode==='2d'?'area.width/2':mode==='sky'?'area.width':'area.height'})<2;})()`);
+        const g=await ev(`(()=>{const card=document.querySelector('.visual-expanded'),r=e=>{const b=e.getBoundingClientRect();return{x:b.x,y:b.y,w:b.width,h:b.height,right:b.right,bottom:b.bottom}},p=card.querySelector('[role=tabpanel]:not([hidden])'),stage=p.querySelector('.visual-stage'),c=stage.querySelector('canvas');return {card:r(card),stage:r(stage),canvas:r(c),header:r(document.querySelector('.top')),nav:r(document.querySelector('#tabs')),pressed:p.querySelector('.visual-expand').getAttribute('aria-pressed'),inert:document.querySelector('#app').inert,viewportWidth:document.documentElement.clientWidth,overlays:document.querySelectorAll('.visual-expanded').length};})()`);
+        const label=route+' '+mode+' expanded '+w;
+        check(label+' fills space below visible header',g.header.y>=-.5&&g.card.y>=g.header.bottom-.5&&g.card.y<g.header.bottom+(w>=600&&w<1200?60:1),g);
+        check(label+' preserves navigation',w>=1200?g.card.x>=g.nav.right-.5:w<600?g.card.bottom<=g.nav.y+.5:g.card.y>=g.nav.bottom-.5,g);
+        check(label+' fits and fills the available viewport',Math.abs(g.card.right-g.viewportWidth)<2&&Math.abs(g.card.bottom-(w<600?g.nav.y:h))<2,g);
+        check(label+' canvas stays within visualization',g.canvas.w>0&&g.canvas.h>0&&g.canvas.w<=g.stage.w+1&&g.canvas.h<=g.stage.h+1,g);
+        check(label+' one accessible expansion, existing state and timer cadence',g.overlays===1&&g.pressed==='true'&&g.inert&&await ev('document.querySelector(".visual-expanded canvas")===__visualCanvas || [...document.querySelectorAll(".visual-expanded canvas")].includes(__visualCanvas)')&&await ev('JSON.stringify(SatStore.settings)===__visualSettings && __layout.intervals.size===__visualTimers'));
+        if(mode==='2d'||mode==='sky')check(label+' preserves projection proportions',Math.abs(g.canvas.w/(mode==='2d'?2:1)-g.canvas.h)<1.5,g.canvas);
+        if(mode==='ground')check(label+' preserves the viewing direction and zoom',await ev(`document.querySelector('#${host} .ground-hud').textContent===__visualHud`));
+        if(w===1440)fs.writeFileSync(path.join(shots,'expanded-'+route.split('/')[0]+'-'+mode+'.png'),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+        if(mode==='3d'){await clickAt('#'+panel+mode+' .visual-expand');}else await escape();
+        await until('!document.querySelector(".visual-expanded")');
+        check(label+' restores DOM, focus, scrolling and normal page',await ev(`!document.querySelector('#app').inert && document.querySelector('#app').contains(__visualCanvas) && document.activeElement.matches('#${panel+mode} .visual-expand') && document.querySelector('#${panel+mode} .visual-expand').getAttribute('aria-pressed')==='false' && Math.abs(scrollY-__visualScroll)<2`));
+      }
+      console.log('PASS '+route+' expanded views at '+w+' × '+h);
+    }
+    await resize(1440,900);await ev(`document.querySelector('#${tab}2d').click();document.querySelector('#${panel}2d .visual-expand').scrollIntoView({block:'center'});`);await clickAt('#'+panel+'2d .visual-expand');
+    for(const mode of ['3d','sky','ground','2d']){await clickAt('#'+tab+mode);check(route+' switches tab '+mode+' without leaving expanded view',await ev(`!!document.querySelector('.visual-expanded #${panel+mode}:not([hidden])')`));}
+    for(const [w,h] of [[375,812],[812,375],[1024,768],[1440,900]]){await resize(w,h);check(route+' expansion follows shell resize '+w,await ev('(()=>{const c=document.querySelector(".visual-expanded").getBoundingClientRect(),h=document.querySelector(".top").getBoundingClientRect(),n=document.querySelector("#tabs").getBoundingClientRect();return h.y>=0&&c.y>=h.bottom-.5&&c.height>100&&(innerWidth>=1200?c.x>=n.right-.5:innerWidth<600?c.bottom<=n.y+.5:c.y>=n.bottom-.5);})()'));}
+    await clickAt('#tabs [data-tab="settings"]');await until('document.querySelector("#app").classList.contains("page-settings")');
+    check(route+' navigation cleans up expansion and focus restrictions',await ev('!document.querySelector(".visual-expanded") && !document.querySelector(".visual-placeholder") && !document.querySelector("#app").inert && !document.documentElement.classList.contains("visual-expanded-open")'));
+  }
   for(let i=0;i<6;i++){await go('live/25544');await go('settings');await go('passes');await ev('document.querySelectorAll(".pass")[1].click()');}
   await go('settings');
   const beforeSkip=await ev('location.hash');await ev('document.querySelector(".skip-link").click()');

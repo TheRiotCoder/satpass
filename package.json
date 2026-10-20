@@ -1,6 +1,6 @@
 {
   "name": "satpass",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "private": true,
   "description": "Offline satellite pass predictor and sky tracker",
   "author": "SatPass contributors",

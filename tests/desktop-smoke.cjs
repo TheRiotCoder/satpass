@@ -91,6 +91,14 @@ async function close() {
   await evaluate("document.querySelector('#visibleGroundE').click(); true");
   await until("document.querySelector('.ground-hud').textContent.includes('LOOKING E · 90°')");
   check("3D camera controls work in Electron", true);
+  await evaluate("document.querySelector('#visiblePanelground .visual-expand').click(); true");
+  await until("document.querySelector('.visual-expanded .ground-scene')?.height>500");
+  check("packaged view expands while keeping the shell and camera", await evaluate("!!window.SatExpand && document.querySelector('#app').inert && document.querySelector('.visual-expanded').getBoundingClientRect().top>=document.querySelector('#tabs').getBoundingClientRect().bottom && document.querySelector('.ground-hud').textContent.includes('LOOKING E · 90°')"));
+  await evaluate("document.querySelector('#visibleTabsky').click(); true");
+  check("expanded view can switch visualization tabs", await evaluate("!!document.querySelector('.visual-expanded #visiblePanelsky:not([hidden])')"));
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  check("Escape restores the packaged dashboard", await evaluate("!document.querySelector('.visual-expanded') && !document.querySelector('#app').inert && document.activeElement.matches('#visiblePanelsky .visual-expand')"));
+  await evaluate("document.querySelector('#visibleTabground').click(); true");
   await evaluate("document.querySelector('#visibleGround').scrollIntoView({block:'center'}); true"); await sleep(100);
   fs.writeFileSync(path.join(shotDir, "visible-3d.png"), Buffer.from((await send("Page.captureScreenshot", { format: "png" })).data, "base64"));
   await evaluate("location.hash='#/live/25544'; true"); await until("!!document.querySelector('#tabground')");

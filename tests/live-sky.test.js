@@ -20,13 +20,13 @@ function fixture(hasLocation, initialState, validSat = true, bodies = []) {
       settings:{lat:30,lon:-97,alt:150,minEl:10},isFav:()=>false},
     P:{makeObserver:()=>({dummy:true}),groundTrack:()=>[],stateAt:()=>state,footprintAngleDeg:()=>20},
     R:{radios:()=>[]},F:{age:()=>'1h'},Dr:{worldmap:(...args)=>mapDraws.push(args)},
-    window:{SatGround:{create:(host,pick)=>{ground.pick=pick;return ground;}},SatVisible:V,SatCelestial:{positions:()=>bodies},SatSky:{pick:Sky.pick,draw:(canvas,w,items,options)=>{
+    window:{SatExpand:{bind:()=>({dispose(){},resize(){}}),dimensions:()=>({width:320,height:undefined,expanded:false})},SatGround:{create:(host,pick)=>{ground.pick=pick;return ground;}},SatVisible:V,SatCelestial:{positions:()=>bodies},SatSky:{pick:Sky.pick,draw:(canvas,w,items,options)=>{
       skyDraws.push({items,options,points:items.map(s=>Sky.project(s.az,s.el,w)).filter(Boolean)});
       return {size:w,hits:items.map(s=>({...s,...Sky.project(s.az,s.el,w)}))};
     }}}, main:{innerHTML:''},view:{token:1},passCache:{},$,$$:()=>[],watchSize:()=>()=>{},Date,
     entry:()=>({epochMs:0}),satObj:()=>validSat?{}:null,satSelectHtml:()=>'',setTitle:()=>{},radarInfoOf:()=>null,
     observer:()=>obs,panelWidth:()=>320,nameOf:n=>'Satellite '+n,esc:String,fmt:(n,d)=>n.toFixed(d),az:n=>Math.round(n)+'° E',
-    go:()=>{},refreshNextBar:()=>{},every:()=>{},setTimeout:()=>{},computePasses:()=>{},passesCurrent:()=>false
+    go:()=>{},queueResize:()=>{},refreshNextBar:()=>{},every:()=>{},setTimeout:()=>{},computePasses:()=>{},passesCurrent:()=>false
   };
   vm.runInNewContext(route,context);context.ROUTES.live([25544]);
   return {nodes,stored,skyDraws,groundDraws,ground,mapDraws,context,focus,setState:s=>{state=s;context.view.tick();}};

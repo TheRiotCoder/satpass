@@ -10,6 +10,8 @@ Predictions use public orbital elements (TLEs) from [CelesTrak](https://celestra
 
 ## Features
 
+- **Expand tracker views**: the corner expand button on every map, globe and sky visualization in Live Tracker and Visible Now fills the area beside navigation and below the page header. Switch view tabs while expanded, then use the restore button or Esc to return to the dashboard. Selection, filters and viewing direction are retained.
+
 - **Desktop app (Linux/Windows)**: Electron packaging in this repository loads all assets directly from the installed application, including offline on first launch. Linux builds produce AppImage and `.deb` packages; Windows builds produce an NSIS installer. Settings persist separately from the browser, and application updates use a newer desktop installer. See [desktop installation, development and builds](electron/README.md).
 
 - **3D Sky**: fourth tab on Live Tracker and Visible Now, using locally bundled [Three.js 0.180.0](https://github.com/mrdoob/three.js/tree/r180) under MIT ([license](js/vendor/three-LICENSE.txt), [provenance](js/vendor/three-README.md)). Stand at the active saved/custom observing point and drag to look around a perspective sky, including directly overhead. Scroll/pinch or use buttons to zoom; arrow keys turn, +/− zoom, Home faces north. Compass buttons, elevation grid, minimum-elevation ring and a live camera bearing help orient the view. Tap a marker to identify it; **Find selected** points the camera at a selected satellite or reference object. Uses the same satellite filters and Moon/planet/Polaris toggle as the chart. True-north bearings and geometric horizon; a decorative tree silhouette separates sky and ground in every direction. Trees, symbols and sky colors are illustrative; actual terrain, cloud, other stars, constellations and device orientation tracking are not modeled. Requires WebGL 2; if unavailable, the Sky View chart remains available. Rendering pauses off-tab/when hidden and releases GPU resources on leaving the page. Both Three.js modules are precached for offline use.
@@ -200,6 +202,8 @@ Polaris uses the bundled Astronomy Engine `Star1` definition with [SIMBAD’s al
 
 ## Release notes
 
+- **1.5.2** – Visible Now prioritizes the visualization in the wider left column, with a compact satellite list on the right and wrapping satellite names.
+- **1.5.1** – Overlay expand/restore controls for all four Live Tracker and Visible Now visualizations, retaining the app header/navigation and current view state.
 - **1.5.0** – Adaptive desktop/tablet/phone dashboards, adjacent pass previews, responsive canvas sizing and browser-assisted desktop location. See [layout implementation and review](docs/ADAPTIVE_LAYOUT.md).
 - **1.4.0** – Electron desktop app for Linux, with AppImage/Debian packages and a Windows NSIS build configuration/workflow. Bundled assets work offline from first launch; browser/PWA deployment remains available.
 

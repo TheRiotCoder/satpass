@@ -134,3 +134,46 @@ Safari. The Windows configuration remains available, but no native Windows
 installation was tested here. Real browser geolocation still needs the user's
 permission and a working browser location provider; automated handoff checks use
 simulated coordinates.
+
+## Expanded tracker views (1.5.1)
+
+Live Tracker and Visible Now now place a 44 px expand/restore button on each
+visualization. The expanded card keeps the page header, navigation and four
+view tabs accessible. Escape restores the dashboard, scroll position and button
+focus. Existing canvases/renderers are reused so selections, filters and camera
+direction survive expansion. Maps keep their 2:1 projection and sky charts stay
+circular; globe and 3D Sky render at the available viewport height. No library
+or network dependency was added. The new module is included in the offline shell.
+
+Verification for this update:
+
+- All 40 expand/restore combinations passed: both tracker pages, four views,
+  and desktop, phone, landscape phone, tablet and ultrawide sizes. A focused run
+  of the responsive test's expansion, navigation cleanup, offline reload and
+  location handoff sections passed **300 checks**. The longer run also passed
+  its 18 baseline viewport groups before termination after the expansion cases.
+- Packaged Linux Electron smoke: **20 checks passed**, including expansion,
+  tab switching, Escape, preserved camera direction and offline startup/restart.
+- General suite: **1,132 passed, 1 failed**; the existing SAR catalog freshness
+  assertion described above remains. Full browser smoke: **255/258 passed**;
+  three assertions assume a longer/higher ISS pass than the current prediction
+  supplies (table length, step-size row ratio and Doppler excursion). No
+  unexpected console problems were reported; orbital calculations are unchanged.
+- Linux version **1.5.1** `.deb` and AppImage built; package version and amd64
+  metadata verified. `git diff --check` is clean.
+
+## Visible Now column balance (1.5.2)
+
+The Live Tracker column rules now apply only inside `.live-dashboard`.
+Previously, the wide-screen rule also moved Visible Now's tracker to column 2,
+leaving its satellite list in the larger column. At 900 px and wider, Visible Now
+explicitly places its visualization on the left, gives it the remaining width,
+and uses a 280–400 px list on the right. Below 900 px, it keeps the visualization
+above the list. Satellite name buttons can shrink and wrap beside their Live
+links, including names with long unbroken text.
+
+Verification: 293 browser layout checks passed across 17 viewport sizes and all
+four visualizations, including long names, expand/restore and the separate Live
+Tracker layout. The packaged Linux app passed all 20 desktop smoke checks;
+shell and service-worker checks passed (77 and 29). No renderer errors were
+reported. Screenshots were reviewed at desktop and tablet sizes.

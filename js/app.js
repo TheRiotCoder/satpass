@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.5.0";
+  var DAY = 86400000, APP_VERSION = "1.5.2";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -783,6 +783,7 @@
       '<div id="panelground" role="tabpanel" aria-labelledby="tabground" hidden>' + groundHtml("liveGround") + '<p class="note" id="liveGroundSelection"></p></div><div id="liveSkyReferences" hidden>' + celestialHtml("liveCelestial") + '</div>' +
       '</section><section class="card live-context"><h2>Next pass &amp; actions</h2><div id="liveNext"></div><div class="actions"><a class="btn" href="#/passes/' + n + '">Passes for this satellite</a>' + (R.radios(n).length ? '<a class="btn" href="#/doppler/' + n + '">📻 Doppler</a>' : radarInfoOf(n) ? '<a class="btn" href="#/doppler/' + n + '">📡 Radar</a>' : "") + "</div></section></div>" +
       '<p class="disclaimer">Position from SGP4 using a TLE ' + (entry(n) ? F.age(Date.now() - entry(n).epochMs) : "?") + ' old. Not for navigation.</p>';
+    var visual = window.SatExpand.bind($(".tracker-visual", main), queueResize);
     $("#liveSel").onchange = function () { go("#/live/" + this.value); };
     var fb = $("#liveFav"); function favState() { fb.textContent = S.isFav(n) ? "★ Favorite" : "☆ Favorite"; }
     fb.onclick = function () { S.toggleFav(n); favState(); refreshNextBar(); }; favState();
@@ -820,8 +821,8 @@
       if (hit) { celestialSelected = hit.kind === "satellite" ? null : hit.id; tick(); }
     };
     bindGround("liveGround", function () { return ground; });
-    view.dispose = function () { if (globe) globe.dispose(); if (ground) ground.dispose(); };
-    if (!sat) { $("#liveSkyChart").hidden = true; selectView(mode); return; }
+    view.dispose = function () { visual.dispose(); if (globe) globe.dispose(); if (ground) ground.dispose(); };
+    if (!sat) { view.resize = visual.resize; $("#liveSkyChart").hidden = true; selectView(mode); return; }
     var obs = S.hasLocation() ? observer() : null, canvas = $("#map"), trackAt = 0, tr = null, nextTxt = "";
     $("#liveSkyLocation").hidden = !!obs;
     $("#liveSkyChart").hidden = !obs;
@@ -835,7 +836,7 @@
     function drawScene() {
       if (!scene) return;
       var s = scene.s, drawing = scene.drawing, now = scene.now;
-      if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#globe")); globe.update(drawing, panelWidth($("#globe").parentElement)); }
+      if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#globe")); var area = window.SatExpand.dimensions($("#globe")); globe.update(drawing, area.width, area.height); }
       else if (mode === "sky" || mode === "ground") {
         $("#liveSkyChart").hidden = !obs;
         $("#liveGround").hidden = !obs;
@@ -845,7 +846,10 @@
           if (mode === "ground") {
             if (!ground) ground = window.SatGround.create($("#liveGround"), function (hit) { celestialSelected = hit.kind === "satellite" || !hit.kind ? null : hit.id; tick(); });
             ground.update(skyItems, { minEl: S.settings.minEl, sunEl: s.sunEl, labels: true, centerSelected: true });
-          } else liveSkyData = window.SatSky.draw($("#liveSkyCanvas"), panelWidth($("#liveSkyCanvas").parentElement), skyItems, { minEl: S.settings.minEl });
+          } else {
+            var area = window.SatExpand.dimensions($("#liveSkyCanvas"), 1);
+            liveSkyData = window.SatSky.draw($("#liveSkyCanvas"), area.width, skyItems, { minEl: S.settings.minEl, maxSize: area.expanded ? area.width : undefined });
+          }
           $("#liveSkyStatus").textContent = s.el < 0 ? "Below your horizon (" + fmt(s.el, 1) + "°). The satellite will appear on the chart when it rises." : s.el < S.settings.minEl ? "Above the horizon, below your " + S.settings.minEl + "° minimum elevation setting." : "Above your horizon. Position updates every second.";
           $("#liveSkyReadout").textContent = nameOf(n) + " · Bearing " + az(s.az) + " · Elevation " + fmt(s.el, 1) + "° · Range " + Math.round(s.rangeKm).toLocaleString("en-US") + " km · " + window.SatVisible.conditions(s);
           $("#liveGroundStatus").textContent = $("#liveSkyStatus").textContent.replace("chart", "sky");
@@ -854,7 +858,7 @@
           $("#liveGroundFind").disabled = s.el < 0 && !bodyPick;
         } else { liveSkyData = null; renderCelestial("liveCelestial", null, now, celestialSelected); }
       }
-      else Dr.worldmap(canvas, panelWidth(canvas.parentElement), drawing);
+      else Dr.worldmap(canvas, window.SatExpand.dimensions(canvas, 2).width, drawing);
     }
     function tick() {
       var now = Date.now(), o = obs || P.makeObserver(0, 0, 0), s = P.stateAt(sat, o, now, true);
@@ -881,7 +885,7 @@
         $("#liveNext").innerHTML = c ? '<p class="note"><b>' + (c.aos <= now ? "Pass in progress – LOS in " + F.countdown(c.los - now) : "Next pass in " + F.countdown(c.aos - now)) + "</b> (max " + Math.round(c.maxEl) + "°, " + clk(c.aos) + ') · <a class="link" href="#/pass/' + n + "/" + Math.round(c.aos) + '">details</a></p>' : '<p class="note">Computing next pass…</p>';
       }
     }
-    view.resize = drawScene; view.tick = tick; $$(".canvaswrap", main).forEach(watchSize); selectView(mode); every(1000, tick);
+    view.resize = function () { visual.resize(); drawScene(); }; view.tick = tick; $$(".canvaswrap", main).forEach(watchSize); selectView(mode); every(1000, tick);
     if (obs) { var token = view.token; setTimeout(function () { if (token === view.token) { computePasses(n, 2); } }, 30); }
   };
 
@@ -920,6 +924,7 @@
       '<section class="card visible-list-panel"><h2>Above your horizon</h2><p class="note">Highest elevation first. Bearings are degrees clockwise from <b>true north</b>; a magnetic compass may differ. Elevation: 0° at the horizon, 90° directly overhead.</p>' +
       '<p class="banner" id="visibleEmpty" hidden></p><div id="visibleList"></div></section></div>' +
       '<p class="disclaimer" id="visibleCatalog"></p><p class="disclaimer">Above the horizon and sunlit does not guarantee naked-eye visibility. Brightness, cloud and terrain are not modeled. Predictions use SGP4 and public TLEs; old elements reduce accuracy. This page covers the app’s catalog and imported or looked-up satellites, not every object in orbit.</p>';
+    var visual = window.SatExpand.bind($(".tracker-visual", main), queueResize);
     var obs = point ? P.makeObserver(point.lat, point.lon, point.alt) : null;
     var list = $("#visibleList");
     function updateObserver() {
@@ -1002,8 +1007,9 @@
     function drawScene() {
       if (!scene || !obs) return;
       var rows = scene.rows, drawing = scene.drawing, now = scene.now, options = scene.options, sunEl = scene.sunEl, pick = scene.pick, showLabels = scene.showLabels;
-      var panel = $("#visiblePanel" + mode), w = panelWidth(panel.querySelector(".canvaswrap") || panel);
-      if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#visibleGlobe")); globe.update(drawing, w); }
+      var canvas = mode === "ground" ? null : $(mode === "2d" ? "#visibleMap" : mode === "3d" ? "#visibleGlobe" : "#visibleSkyMap");
+      var area = canvas ? window.SatExpand.dimensions(canvas, mode === "2d" ? 2 : mode === "sky" ? 1 : 0) : null, w = area && area.width;
+      if (mode === "3d") { if (!globe) globe = window.SatGlobe.create($("#visibleGlobe")); globe.update(drawing, w, area.height); }
       else if (mode === "sky" || mode === "ground") {
         var bodies = renderCelestial("visibleCelestial", point, now, celestialSelected);
         var skyItems = rows.map(function (r) {
@@ -1012,7 +1018,7 @@
         if (mode === "ground") {
           if (!ground) ground = window.SatGround.create($("#visibleGround"), function (hit) { if (hit.kind === "satellite" || !hit.kind) { selected = hit.id; celestialSelected = null; } else celestialSelected = hit.id; tick(); });
           ground.update(skyItems, { minEl: options.minEl, labels: showLabels, sunEl: sunEl });
-        } else skyChart = window.SatSky.draw($("#visibleSkyMap"), w, skyItems, { minEl: options.minEl, labels: showLabels });
+        } else skyChart = window.SatSky.draw($("#visibleSkyMap"), w, skyItems, { minEl: options.minEl, labels: showLabels, maxSize: area.expanded ? w : undefined });
         var bodyPick = bodies.filter(function (b) { return b.id === celestialSelected; })[0];
         $("#visibleSkySelection").textContent = bodyPick ? bodyPick.name + " · " + celestialReadout(bodyPick) : pick ? nameOf(pick.norad) + " · Bearing " + az(pick.state.az) + " · Elevation " + fmt(pick.state.el, 1) + "° · Range " + Math.round(pick.state.rangeKm).toLocaleString("en-US") + " km · " + V.conditions(pick.state) : "Tap a marker or choose a satellite in the list below for its name and readouts.";
         $("#visibleGroundSelection").textContent = $("#visibleSkySelection").textContent;
@@ -1043,8 +1049,8 @@
       $("#visibleCatalog").textContent = result.total + " catalog satellites checked" + (result.skipped ? " · " + result.skipped + " with unusable orbital positions skipped" : "") + ". " + (S.allLoaded() ? "Includes all catalog categories and your imports/lookups." : "Some catalog categories are still loading or unavailable; results may be incomplete.");
     }
     bindGround("visibleGround", function () { return ground; });
-    view.dispose = function () { if (globe) globe.dispose(); if (ground) ground.dispose(); };
-    view.tick = tick; view.resize = drawScene; $$(".canvaswrap", main).forEach(watchSize); updateObserver(); chooseMode(mode); every(1000, tick);
+    view.dispose = function () { visual.dispose(); if (globe) globe.dispose(); if (ground) ground.dispose(); };
+    view.tick = tick; view.resize = function () { visual.resize(); drawScene(); }; $$(".canvaswrap", main).forEach(watchSize); updateObserver(); chooseMode(mode); every(1000, tick);
     if (!S.allLoaded()) S.ensureAll().then(function () { if (token === view.token) tick(); });
   };
 
@@ -1421,7 +1427,7 @@
   }
   document.addEventListener("DOMContentLoaded", function () {
     main = $("#app"); titleEl = $("#title");
-    $(".skip-link").onclick = function (event) { event.preventDefault(); main.focus(); main.scrollIntoView({ block: "start" }); };
+    $(".skip-link").onclick = function (event) { event.preventDefault(); var target = $(".visual-expanded .live-view-tabs [aria-selected=true]") || main; target.focus({ preventScroll: true }); if (target === main) main.scrollIntoView({ block: "start" }); };
     S.init();
     $("#themeBtn").onclick = function () { var t = S.settings.theme || "auto"; S.set({ theme: t === "auto" ? "dark" : t === "dark" ? "light" : "auto" }); applyTheme(); if (view.tick) view.tick(); };
     $("#tzBtn").onclick = function () { S.set({ utc: !utc() }); syncTz(); };

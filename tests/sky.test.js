@@ -46,4 +46,6 @@ ok('reference names are labeled even when satellite labels are off', texts.inclu
 const starChart=Sky.draw(canvas,360,[{id:'star:Polaris',name:'Polaris · North Star',kind:'star',az:0.8,el:40,color:'#c4b5fd'}],{labels:false});
 ok('Polaris gets a labeled star reference marker', starChart.hits.length===1 && starChart.hits[0].kind==='star' && texts.includes('Polaris · North Star'));
 ok('Polaris tap returns its star identity', Sky.pick(starChart.hits,starChart.hits[0].x,starChart.hits[0].y).id==='star:Polaris');
+const expanded = Sky.draw(canvas, 1200, [], {maxSize:900});
+ok('expanded chart grows past the dashboard cap while fitting available height', expanded.size === 900 && canvas.width === 1800 && canvas.height === 1800);
 done();

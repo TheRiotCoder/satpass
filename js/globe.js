@@ -124,8 +124,8 @@
     var events = { pointerdown: pointerDown, pointermove: pointerMove, pointerup: pointerUp, pointercancel: pointerUp, lostpointercapture: pointerUp, wheel: wheel, keydown: key };
     Object.keys(events).forEach(function (name) { canvas.addEventListener(name, events[name], { passive: false }); });
     return {
-      update: function (st, w) {
-        var first = !state; state = st; width = w; height = Math.round(Math.max(300, Math.min(520, w * 0.72)));
+      update: function (st, w, availableHeight) {
+        var first = !state; state = st; width = w; height = Math.round(availableHeight > 0 ? availableHeight : Math.max(300, Math.min(520, w * 0.72)));
         var maxAlt = st.sat ? st.sat.altKm : 0;
         (st.sats || []).forEach(function (item) { maxAlt = Math.max(maxAlt, item.sat.altKm); });
         if (first || st.centerObs) extent = Math.max(1.5, 1.18 * (1 + displayAltitude(maxAlt) / EARTH));
