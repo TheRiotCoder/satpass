@@ -147,3 +147,7 @@ The pinned build tools currently report eight moderate npm audit findings from
 one underlying `sprintf-js` formatting issue inherited through the builder's
 proxy/logging dependency chain. This development-only chain is excluded from
 the packaged app; the archive was checked to contain no `node_modules` directory.
+
+## CI workflow (not enabled)
+
+`electron/desktop-workflow.yml` is guardst7's desktop-packaging GitHub Actions workflow, with actions pinned to commit SHAs. It is parked here, not in `.github/workflows/`, so it does not run on every push. To enable it, copy it to `.github/workflows/desktop.yml` (pushing workflow files needs a token with the `workflow` scope).
