@@ -13,6 +13,8 @@ ok("manifest icons exist (incl. maskable)", man.icons.every(i => fs.existsSync(p
 ok("manifest shortcuts are relative", (man.shortcuts || []).every(s => s.url.startsWith("./")));
 ok("SW has a single VERSION constant", (sw.match(/const VERSION = "satpass-v[\d.]+"/g) || []).length === 1);
 ok("vendored satellite.js ships with its MIT licence", /MIT License/.test(rd("js/vendor/satellite.js-LICENSE.md")));
+ok("Astronomy Engine is bundled locally with MIT license, provenance, and offline cache entries", /MIT License/.test(rd("js/vendor/astronomy-LICENSE.md")) && /2.1.19/.test(rd("js/vendor/astronomy-README.md")) && shell.includes("js/vendor/astronomy.browser.min.js") && shell.includes("js/vendor/astronomy-LICENSE.md"));
+ok("Three.js renderer, its core import and MIT license are bundled and precached", /MIT License/.test(rd("js/vendor/three-LICENSE.txt")) && /0.180.0/.test(rd("js/vendor/three-README.md")) && ["three.module.min.js", "three.core.min.js", "three-LICENSE.txt"].every(f => shell.includes("js/vendor/" + f)) && /three\.core\.min\.js/.test(rd("js/vendor/three.module.min.js")));
 ok(".nojekyll present (GitHub Pages)", fs.existsSync(path.join(root, ".nojekyll")));
 ok("no CDN / third-party script or style at runtime", !/<(script|link)[^>]+(https?:)?\/\/(?!celestrak)[a-z0-9.-]+\//i.test(html) && !/https?:\/\/[^"']*\.(js|css)["']/.test(html));
 const sources = ["index.html", "sw.js", ...fs.readdirSync(path.join(root, "js")).filter(f => f.endsWith(".js")).map(f => "js/" + f)];
@@ -28,7 +30,7 @@ ok("app About/help text documents the same approximations", /geometric/i.test(ap
 ok("README documents in-progress / truncated pass handling", /aosBeforeStart/.test(readme) && /truncated/.test(readme) && /losAfterWindow/.test(readme));
 // real-looking secret values (v1.2.0 handles credential *fields*, so the words themselves are fine): private keys, GitHub/AWS tokens, or a quoted 16+ char literal assigned to a key/secret/password/token name, or a 40-hex SatNOGS-style token
 const secretRe = /(BEGIN (RSA|OPENSSH|PRIVATE)|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|passw(or)?d|token)["']?\s*[:=]\s*["'][A-Za-z0-9_\-]{16,}["']|\b[0-9a-f]{40}\b)/i;
-const files = []; (function walk(d) { for (const f of fs.readdirSync(d)) { if (f === ".git" || f === "vendor") continue; const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : /\.(js|html|css|json|md|py|webmanifest)$/.test(f) && files.push(p); } })(root);
+const files = []; (function walk(d) { for (const f of fs.readdirSync(d)) { if ([".git", "vendor", "node_modules", "release", "dist"].includes(f)) continue; const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : /\.(js|html|css|json|md|py|webmanifest)$/.test(f) && files.push(p); } })(root);
 const hits = files.filter(f => !/tests[\\/](fixtures[\\/]|[\w-]+\.test\.js$|browser-[\w-]+\.js$)/.test(f) && secretRe.test(fs.readFileSync(f, "utf8"))).map(f => path.relative(root, f));
 ok("no secret-looking strings in tracked sources", hits.length === 0, hits);
 // --- v1.1.0: categories, lazy snapshots, SAR docs
@@ -65,7 +67,7 @@ ok("v1.2.1: dead satellites (decommissioned / re-entered) get a 'No signal' bann
 // --- v1.2.1 release hygiene
 ok("MIT LICENSE file exists and README points at it (no 'all rights reserved')", /^MIT License/.test(rd("LICENSE")) && /\[`LICENSE`\]\(LICENSE\)/.test(rd("README.md")) && !/all rights reserved/i.test(rd("README.md")));
 ok("README states that only *.workers.dev proxies pass the CSP and how to edit it; marks Space-Track/N2YO/SatNOGS-token as untested live", /only `\*\.workers\.dev` proxies work out of the box/.test(rd("README.md")) && /connect-src/.test(rd("README.md")) && /Untested live/.test(rd("README.md")) && /untested live/.test(rd("js/app.js")));
-ok("every version string agrees at 1.3.5 (sw.js, app.js, proxy/package.json, proxy/worker.js, README marker, CHANGELOG)", /satpass-v1\.3\.5/.test(rd("sw.js")) && /APP_VERSION = "1\.3\.5"/.test(rd("js/app.js")) && JSON.parse(rd("proxy/package.json")).version === "1.3.5" && /const VERSION = "1\.3\.5"/.test(rd("proxy/worker.js")) && /\*\*1\.3\.5\*\*/.test(rd("README.md")) && /^## 1\.3\.5/m.test(rd("CHANGELOG.md")));
+ok("every version string agrees at 1.5.3 (sw.js, app.js, proxy/package.json, proxy/worker.js, README marker, CHANGELOG)", /satpass-v1\.5\.3/.test(rd("sw.js")) && /APP_VERSION = "1\.5\.3"/.test(rd("js/app.js")) && JSON.parse(rd("proxy/package.json")).version === "1.5.3" && /const VERSION = "1\.5\.3"/.test(rd("proxy/worker.js")) && /\*\*1\.5\.3\*\*/.test(rd("README.md")) && /^## 1\.5\.3/m.test(rd("CHANGELOG.md")));
 ok("install banner waits for a saved location or the 2nd visit; Local/UTC pill and Install button are >= 44 px", /S\.load\("visits", 0\) < 2/.test(rd("js/app.js")) && /\.pill\{[^}]*min-height:44px/.test(rd("css/style.css")) && /\.install \.btn[^{]*\{min-height:44px/.test(rd("css/style.css")));
 ok("location placeholders read as examples ('e.g.'), not as prefilled Austin coordinates", !/30\.2672|-97\.7431|EM10dg/.test(rd("js/app.js")) && /placeholder="e\.g\./.test(rd("js/app.js")));
 ok("reminders: .ics is the primary button and the in-app reminder says it only fires while the app is open", /class="btn primary" id="icsOne"/.test(rd("js/app.js")) && /only while SatPass is open/.test(rd("js/app.js")));

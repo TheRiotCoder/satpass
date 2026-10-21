@@ -1,0 +1,31 @@
+const {ok,near,throws,done} = require('./harness');
+const C = require('../js/celestial'), A = require('../js/vendor/astronomy.browser.min'), Sky = require('../js/sky');
+const point={lat:30,lon:-97,alt:150}, at=Date.parse('2026-10-19T02:00:00Z'), rows=C.positions(point,at);
+ok('Moon plus seven planets and Polaris, with no Earth/Sun/Pluto', rows.length===9 && rows.slice(0,8).map(b=>b.name).join(',') === 'Moon,Mercury,Venus,Mars,Jupiter,Saturn,Uranus,Neptune' && rows[8].id==='star:Polaris');
+ok('every reference has finite coordinates and a distinct string identity', rows.every(b=>Number.isFinite(b.az)&&b.az>=0&&b.az<360&&Number.isFinite(b.el)&&b.el>=-90&&b.el<=90&&(b.kind==='star'?b.id==='star:Polaris':b.id==='body:'+b.name)));
+ok('Moon illumination is a fraction and marker kinds are distinct', rows[0].kind==='moon' && rows[0].illumination>=0 && rows[0].illumination<=1 && rows.slice(1,8).every(b=>b.kind==='planet') && rows[8].kind==='star');
+ok('same observer and second reuse calculations', C.positions(point,at+100)===rows);
+const other=C.positions({lat:-30,lon:83,alt:150},at);
+ok('custom observing point changes Moon and planet positions', Math.abs(other[0].el-rows[0].el)>30 && other.slice(1).some((b,i)=>Math.abs(b.el-rows[i+1].el)>30));
+ok('returning to saved location restores its coordinates', C.positions(point,at).every((b,i)=>Math.abs(b.el-rows[i].el)<1e-10));
+ok('time advances the reference sky', C.positions(point,at+3600000).some((b,i)=>Math.abs(b.az-rows[i].az)>1));
+const obs=new A.Observer(point.lat,point.lon,point.alt), geo=A.RotateVector(A.Rotation_EQJ_EQD(new Date(at)),A.GeoVector('Moon',new Date(at),true)), eq=A.EquatorFromVector(geo), geoH=A.Horizon(new Date(at),obs,eq.ra,eq.dec);
+// A geocentric position omits the nearby Moon's observer parallax. Verify the
+// wrapper uses observer-relative coordinates rather than placing it as a star.
+const centered=A.Equator('Moon',new Date(at),obs,true,true), topoH=A.Horizon(new Date(at),obs,centered.ra,centered.dec);
+near('Moon uses the observer-relative of-date altitude', rows[0].el,topoH.altitude,1e-10);
+ok('nearby Moon includes substantial horizon parallax', Math.abs(rows[0].el-geoH.altitude)>0.2 && Math.abs(rows[0].el-geoH.altitude)<1.2);
+ok('chart rejects reference bodies below horizon', rows.filter(b=>b.el<0).every(b=>Sky.project(b.az,b.el,320)===null));
+ok('reference bodies above horizon project into same sky dome', rows.filter(b=>b.el>=0).every(b=>Sky.project(b.az,b.el,320)!==null));
+ok('polar and dateline observing points work', C.positions({lat:90,lon:180,alt:0},at).every(b=>Number.isFinite(b.el)));
+const north=[0,6,12,18].map(h=>C.positions({lat:40,lon:-97,alt:150},at+h*3600000).find(b=>b.id==='star:Polaris'));
+ok('Polaris stays near true north throughout a northern day', north.every(b=>Math.min(b.az,360-b.az)<2));
+ok('Polaris elevation follows northern latitude, rather than chart center', north.every(b=>Math.abs(b.el-40)<1));
+ok('Polaris moves slightly instead of being pinned exactly to north', north.some(b=>Math.abs(b.az-north[0].az)>0.1) && north[0].az!==0);
+const south=C.positions({lat:-34,lon:151,alt:0},at).find(b=>b.id==='star:Polaris');
+ok('Polaris remains below horizon at southern observing point', south.el<0 && Sky.project(south.az,south.el,320)===null);
+ok('star reference retains an informative name and its own kind', north[0].name==='Polaris · North Star' && north[0].kind==='star' && north[0].illumination===null);
+throws('missing location rejected',()=>C.positions(null,at));
+throws('out of range latitude rejected',()=>C.positions({lat:100,lon:0,alt:0},at));
+throws('invalid time rejected',()=>C.positions(point,NaN));
+done();

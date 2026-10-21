@@ -1,5 +1,74 @@
 # Changelog
 
+## 1.5.3 – Integrate guardst7's work (1.3.6–1.5.2)
+- Integrates the work of guardst7 (thank you!): 3D globe, Visible Now, Sky View and 3D Sky with Moon/planet/Polaris references, adaptive dashboards and expand controls, and the Electron desktop app (Linux AppImage/deb, Windows NSIS). Vendored Astronomy Engine 2.1.19 and three.js r180 verified byte-identical to upstream (MIT). Reviewed: no new network hosts, CSP, vault, proxy-origin or service-worker-strategy changes; the desktop app is not part of the deployed web site.
+- Review follow-ups: GitHub Actions in the desktop workflow pinned to commit SHAs; the workflow is parked at electron/desktop-workflow.yml (not enabled); README notes that desktop installers are unsigned; build-install-mint.sh no longer falls back to a Node binary in a tool-specific cache directory.
+- Tests: the SAR favourite stale-category check measured "not stale yet" against today's date instead of the bundled snapshot's fetch time (Oct 16), so it failed once the snapshot was over a day old. It now measures from the snapshot's fetchedAt.
+
+## 1.5.2 – Visible Now visualization layout
+
+- Keeps the visualization in the larger left column on desktop and tablet, with a 280–400 px satellite list on the right. Scopes the Live Tracker wide-screen placement to its own dashboard so it cannot move the Visible Now visualization into the smaller column.
+- Allows long satellite names to wrap beside their Live links. Narrow screens retain a single column with the visualization before the satellite list.
+
+## 1.5.1 – Expand tracker visualizations
+
+- Adds an overlay expand/restore control to each 2D Map, 3D Globe, Sky View and 3D Sky on Live Tracker and Visible Now. Expanded views use the space around the page header and navigation; tabs, keyboard/touch controls and Esc-to-restore remain available.
+- Reuses existing canvases and renderers, preserving satellite/filter selection and camera direction. Maps and sky charts fit without distortion; globe and 3D Sky use the available viewport height. Route cleanup restores the dashboard and removes expansion listeners.
+
+## 1.5.0 – Adaptive dashboard
+
+- Adds executable `start-web.sh` and `build-install-mint.sh` helpers for the local Python server and Linux Mint desktop build/install workflow.
+- Desktop windows omit the File/Edit/View/Help menu bar.
+
+- Uses a fluid Grid shell, a desktop sidebar, compact tablet navigation, and mobile bottom navigation. Passes gains a shared selected-pass preview; Live/Visible Now, Doppler, Satellites and Setup use their available panel space.
+- Canvas renderers measure their actual panels, keep their aspect ratios and high-density backing buffers, and redraw through a cleaned-up ResizeObserver lifecycle without restarting predictions during resize.
+- Adds responsive browser regression coverage for all routes, 18 viewport sizes, all live views, themes, offline use, and timer/observer cleanup.
+- Fixes desktop automatic location by requesting a consented browser handoff over a temporary loopback-only connection; no Google API account is required.
+
+## 1.4.0 – Electron desktop packaging
+- Adds the native desktop wrapper in this repository, pinned Electron/build dependencies, Linux AppImage and `.deb` targets, and a Windows NSIS target with a Linux/Windows GitHub Actions artifact workflow. Application assets and all offline catalogs are packaged directly; no separate web server or initial online cache fill is needed.
+- Adds an isolated, sandboxed desktop window, native menu, controlled external links, local license viewers, save dialogs and permission prompts. A restricted local asset protocol supports the existing ES modules and Web Crypto without exposing Node.js to renderer code. Settings live in a persistent desktop profile, separate from browser storage.
+- Desktop skips web install/service-worker updates and uses manual package updates. Passphrase credential encryption remains available; unsupported local-origin browser passkeys are not offered. Documents Linux/Windows development, installation, offline behavior and runtime limitations. Adds desktop policy and offline launch/restart/3D smoke tests.
+
+## 1.3.13 – 3D Sky horizon scenery
+- Adds two seamless layers of locally drawn tree silhouettes around the 3D Sky horizon on Live Tracker and Visible Now. Distant and nearby trees adapt their dark colors to the illustrative day/night sky, helping distinguish ground from sky.
+- Scenery rotates with the camera and works offline without additional assets or libraries. Compass marks still identify the true, level horizon; decorative trees do not alter visibility calculations or hide satellite/reference markers.
+
+## 1.3.12 – Interactive 3D Sky
+- Adds a fourth 3D Sky tab on Live Tracker and Visible Now, with an observer-centered perspective camera, 360° mouse/touch look, wheel/pinch/button zoom, keyboard controls, compass directions, overhead/reset controls and Find selected.
+- Reuses active-point satellite and astronomical positions, filters, selection/readouts and the Moon/planet/Polaris toggle. Draws only above-horizon objects; symbols are enlarged for identification, including in daylight. A level horizon, elevation grid and optional minimum-elevation ring provide orientation. Sky colors are illustrative; no terrain, cloud, additional star catalog or device sensors.
+- Bundles pinned Three.js 0.180.0 under MIT, including its license and provenance. Lazy initialization, offline precaching, graceful WebGL 2 fallback, responsive layout, hidden-tab suspension and GPU/event cleanup keep the feature isolated from orbital calculations and existing views.
+
+## 1.3.11 – Polaris sky reference
+- Adds “Polaris · North Star” to the shared reference layer in both Sky Views, with a lavender star marker, automatic label and selectable bearing/elevation readout. The renamed Moon/planets/Polaris toggle retains the existing preference.
+- Uses SIMBAD J2000 coordinates and parallax with Astronomy Engine’s user-defined star support, including date/observer transformations. Small proper motion is omitted; source and approximation are documented in README. Polaris is only drawn above the active observing point’s horizon and is not pinned to exact north. No additional library or runtime network request.
+
+## 1.3.10 – Moon and planets in Sky View
+- Both Sky Views include an optional reference layer for the Moon and seven planets, on by default with a shared remembered toggle. Uses the active saved/custom observing point and time, including observer parallax; geometric elevations match the satellite chart convention.
+- White Moon disc and orange planet diamonds, labels, selectable readouts, and Moon illuminated percentage. References appear above the horizon independently of satellite filters/counts. Satellite and celestial selection identities remain separate; astronomical calculation errors leave satellite rendering available.
+- Astronomy Engine 2.1.19 is bundled unchanged from the official release, with its MIT license, provenance/checksums, About attribution, and offline precaching. No external requests, credentials or API keys are needed at runtime.
+
+## 1.3.9 – Live Tracker Sky View
+- Adds the third Sky View tab to the single-satellite Live Tracker using the shared looking-up chart. Shows the selected satellite with its name, live bearing, elevation, range, lighting conditions and minimum-elevation ring from the saved observing location.
+- Below-horizon objects are not plotted on the sky dome; a message explains when they will appear. A missing location prompts Setup instead of using the fallback coordinates. Unusable orbital positions hide stale chart data.
+- Three-tab keyboard navigation and remembered selection work across satellite changes. Existing map/globe views remain available.
+
+## 1.3.8 – Sky View
+- Third tab in Visible Now shows the satellite sky from the active saved/custom observing point, using the same 1 s SGP4 positions and filters as the map/globe. Looking-up projection: north at top, east on left, overhead at center, horizon at rim; 30° and 60° elevation circles and the optional minimum-elevation ring.
+- Tap/click a marker or select a satellite in the keyboard-accessible list to highlight it and see its name, true-north bearing, elevation, range and viewing conditions. Optional chart labels avoid collisions. The view choice is remembered and three-tab keyboard navigation wraps correctly.
+- Responsive chart supports high-DPI displays, empty results, and offline use. No star catalog, constellation overlay or device orientation tracking in this version.
+
+## 1.3.7 – Visible Now
+- New navigation page shows all above-horizon satellites in the app catalog (all bundled categories plus imported/looked-up objects), updated every second from SGP4. Saved location or a separate custom point controls both views and is marked You. Custom coordinates never overwrite the global location.
+- Multi-satellite 2D Map and 3D Globe tabs, selection highlighting and labels, observer centering, and links to each satellite’s Live page. Globe heights are compressed by default to keep Earth readable with mixed LEO/navigation/high-altitude objects; actual altitude scale is optional. Numeric readouts always use actual positions. Existing single-satellite Live behavior is retained.
+- Highest-elevation-first list shows true-north bearing, elevation, range, sunlight/sky conditions, and TLE age. Filters for minimum elevation, compass sector and optional sunlit + dark sky. Default includes all above-horizon objects; brightness is not modeled and the catalog is not exhaustive.
+- New filtering module is precached for offline use; bad/decayed orbits are skipped independently.
+
+## 1.3.6 – Live tracker globe
+- Separate accessible 2D Map and 3D Globe tabs, with the last selection remembered across satellites and reloads. The existing readouts and map remain available.
+- Self-contained Canvas renderer uses the bundled coastline data: rotatable textured sphere, actual satellite altitude (spherical Earth approximation), Earth-fixed past/future trajectories, observer and radio coverage rings, with far-side occlusion. Shading is decorative, not a day/night model. No external library or runtime downloads.
+- Mouse drag, touch rotation and pinch zoom, wheel zoom, keyboard rotation/zoom, and center-on-satellite controls. Rendering is on demand; pending frames and pointer listeners are cleaned up on tab/view changes. The new renderer is precached for offline use.
+
 ## 1.3.5 – service worker vs. redirecting hosts (fix for the new Cloudflare Pages origin)
 - **Bug (found by the live smoke on the new origin):** Cloudflare Pages answers `/index.html` with a 308 redirect to `/`. The service worker pre-cached that **redirected** response and served it to navigations, which Chrome refuses ("a redirected response was used for a request whose redirect mode is not follow"): after the first visit every navigation/reload showed a browser error page. 1.3.4 on Pages was affected; GitHub Pages is not (no redirect).
 - **Fix:** every shell response is rebuilt as a plain (non-redirected) `Response` when precaching and again before it is served (so entries cached by 1.3.4 heal themselves on the next load). Pre-caching now fetches each file itself (`cache: "reload"`, all must be OK, same all-or-nothing install as before). Regression tests with a redirecting host; the live smoke now also checks a real navigation under an active service worker. No other change.

@@ -6,3 +6,4 @@ __pycache__/
 *.log
 dist/
 .wrangler/
+release/

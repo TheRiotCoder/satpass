@@ -4,8 +4,10 @@
   var F = window.SatFmt;
   function css(name, fallback) { var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fallback; }
   function setup(canvas, w, h) {
+    w = Math.max(1, Number(w) || canvas.parentElement.clientWidth || 1);
+    h = Math.max(1, Number(h) || w);
     var dpr = Math.min(window.devicePixelRatio || 1, 3);
-    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); canvas.style.width = w + "px"; canvas.style.height = h + "px";
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); canvas.style.width = w + "px"; canvas.style.height = "auto";
     var ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); return ctx;
   }
   /* ---------- sky plot ----------
@@ -101,7 +103,13 @@
       });
       ctx.setLineDash([]);
     }
-    if (st.obs) { var ox = X(st.obs.lon), oy = Y(st.obs.lat); ctx.fillStyle = "#4ade80"; ctx.strokeStyle = "#052e1a"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(ox, oy - 7); ctx.lineTo(ox + 6, oy + 5); ctx.lineTo(ox - 6, oy + 5); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+    (st.sats || []).forEach(function (item) {
+      var s = item.sat, x = X(s.lonDeg), y = Y(s.latDeg);
+      ctx.fillStyle = item.color || acc; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      if (item.label) { ctx.fillStyle = fg; ctx.font = "11px system-ui,sans-serif"; ctx.textAlign = x > w / 2 ? "right" : "left"; ctx.fillText(item.label, x + (x > w / 2 ? -7 : 7), y - 7); }
+    });
+    if (st.obs) { var ox = X(st.obs.lon), oy = Y(st.obs.lat); ctx.fillStyle = "#4ade80"; ctx.strokeStyle = "#052e1a"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(ox, oy - 7); ctx.lineTo(ox + 6, oy + 5); ctx.lineTo(ox - 6, oy + 5); ctx.closePath(); ctx.fill(); ctx.stroke(); if (st.sats) { ctx.fillStyle = fg; ctx.font = "bold 12px system-ui,sans-serif"; ctx.textAlign = ox > w / 2 ? "right" : "left"; ctx.fillText("You", ox + (ox > w / 2 ? -10 : 10), oy + 17); } }
     if (st.sat) {
       var sx = X(st.sat.lonDeg), sy = Y(st.sat.latDeg); ctx.fillStyle = "#f472b6"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
       ctx.fillStyle = fg; ctx.font = "bold 12px system-ui,sans-serif"; ctx.textAlign = sx > w - 70 ? "right" : "left"; ctx.fillText(st.label || "", sx + (sx > w - 70 ? -10 : 10), sy - 8);

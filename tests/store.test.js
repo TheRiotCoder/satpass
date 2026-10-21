@@ -67,7 +67,8 @@ const ids = a => a.slice().sort((x, y) => x - y);
     const later = Date.now() + 25 * 3600e3;
     ok("no automatic refresh of an unused category even when old", S.staleCategories(null, later).length === 0 || S.settings.favs.some(n => S.categoriesOf(n).some(c => !Cat.BY_ID[c].core)));
     S.toggleFav(39634);
-    ok("a favourite in SAR makes SAR (and only SAR) eligible once its data is > 24 h old; not before", S.staleCategories(null, Date.now()).length === 0 && S.staleCategories(null, later).includes("sar") && !S.staleCategories(null, later).includes("nav"), S.staleCategories(null, later));
+    const fresh = S.catStatus("sar").fetchedAt + 3600e3; // data-relative, not wall-clock: the bundled snapshot ages
+    ok("a favourite in SAR makes SAR (and only SAR) eligible once its data is > 24 h old; not before", S.staleCategories(null, fresh).length === 0 && S.staleCategories(null, later).includes("sar") && !S.staleCategories(null, later).includes("nav"), S.staleCategories(null, later));
     ok("opening a category makes it eligible too (also=)", S.staleCategories("nav", later).includes("nav"));
     ok("favourites span categories", S.isFav(39634) && S.isFav(25544));
   }

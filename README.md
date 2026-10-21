@@ -10,18 +10,49 @@ Predictions use public orbital elements (TLEs) from [CelesTrak](https://celestra
 
 ## Features
 
+- **Expand tracker views**: the corner expand button on every map, globe and sky visualization in Live Tracker and Visible Now fills the area beside navigation and below the page header. Switch view tabs while expanded, then use the restore button or Esc to return to the dashboard. Selection, filters and viewing direction are retained.
+
+- **Desktop app (Linux/Windows)**: Electron packaging in this repository loads all assets directly from the installed application, including offline on first launch. Linux builds produce AppImage and `.deb` packages; Windows builds produce an NSIS installer. Settings persist separately from the browser, and application updates use a newer desktop installer. See [desktop installation, development and builds](electron/README.md).
+
+- **3D Sky**: fourth tab on Live Tracker and Visible Now, using locally bundled [Three.js 0.180.0](https://github.com/mrdoob/three.js/tree/r180) under MIT ([license](js/vendor/three-LICENSE.txt), [provenance](js/vendor/three-README.md)). Stand at the active saved/custom observing point and drag to look around a perspective sky, including directly overhead. Scroll/pinch or use buttons to zoom; arrow keys turn, +/− zoom, Home faces north. Compass buttons, elevation grid, minimum-elevation ring and a live camera bearing help orient the view. Tap a marker to identify it; **Find selected** points the camera at a selected satellite or reference object. Uses the same satellite filters and Moon/planet/Polaris toggle as the chart. True-north bearings and geometric horizon; a decorative tree silhouette separates sky and ground in every direction. Trees, symbols and sky colors are illustrative; actual terrain, cloud, other stars, constellations and device orientation tracking are not modeled. Requires WebGL 2; if unavailable, the Sky View chart remains available. Rendering pauses off-tab/when hidden and releases GPU resources on leaving the page. Both Three.js modules are precached for offline use.
+
 - **Location**: GPS button, manual lat/lon/elevation, **Maidenhead grid** entry and display (type a grid to get lat/lon, or lat/lon to get the grid; 4/6/8/10 characters). Saved in `localStorage`. Local-time / UTC toggle in the header.
 - **Satellite list** with search and favorites. Defaults to the **ISS (25544)**. The curated set covers ISS, Tiangong (CSS), SO-50, AO-91, AO-92, AO-7, RS-44, FO-29, AO-73, CAS-4A/4B, IO-117, TEVEL 1–9, NOAA 15/18/19 and Meteor-M2 3/4. All ~185 bundled satellites are searchable.
 - **Categories** (Sats tab chips with counts): **Amateur**, **Stations**, **Weather**, **SAR**, **Earth observation**, **Navigation** (GPS, Galileo, GLONASS, BeiDou) and **Science**, plus Favourites (across all categories) and name / NORAD / category search. Only Amateur, Stations and Weather load at start; the others are fetched the first time you open them (and cached). Starlink, OneWeb and geostationary satellites are not listed; a single Starlink/OneWeb can be looked up by name + number (e.g. `STARLINK-1234`).
 - **SAR satellites** ([list below](#sar-satellites-radar-panel)): the Doppler tab shows a **Radar panel** (band, nominal centre frequency, bandwidth, polarizations, modes, source) instead of up/downlinks, with the one-way carrier Doppler at your position, ascending/descending direction, local solar time and an approximate swath-proximity check at closest approach.
 - **Pass prediction** for 1–10 days: AOS / max-elevation (TCA) / LOS times, azimuth + compass point, duration, max elevation, sorted list, tap a pass for detail. Minimum-elevation filter (default 10°; AOS/LOS are when the satellite crosses that elevation). **VISIBLE** flag for ISS/Tiangong: satellite sunlit (Earth shadow test), observer's sun elevation below −6°, satellite above horizon.
 - **Pass detail**: polar sky plot (AOS/TCA/LOS marks, time ticks, visible part highlighted, live "NOW" marker), az/el/range/range-rate table at 10/20/30 s, `.ics` export, in-app reminder.
-- **Live tracker**: az, el, range, range-rate, lat/lon/alt, speed, sunlit/eclipsed, 1 s updates; equirectangular map with a small bundled coastline, ground track (past + future), footprint circle (0° horizon and your minimum elevation).
+- **Live tracker**: az, el, range, range-rate, lat/lon/alt, speed, sunlit/eclipsed, 1 s updates; separate **2D Map / 3D Globe / Sky View / 3D Sky** tabs (choice remembered), an offline globe with drag/touch/keyboard rotation, zoom and a center-on-satellite control, satellite altitude and Earth-fixed trajectories; equirectangular map with a small bundled coastline, ground track (past + future), footprint circle (0° horizon and your minimum elevation). Sky View shows the selected satellite from your saved observing location with live bearing/elevation/range and lighting conditions; below-horizon satellites are explained without plotting them above the horizon.
+- **Visible Now**: all catalog satellites above the observing point, updated every second, with **2D Map / 3D Globe / Sky View / 3D Sky** tabs (globe heights compressed for readability, with an actual-scale option). Uses your saved location or a separate custom latitude/longitude/elevation. Shows true-north compass bearings, elevation, range, sunlight/sky conditions and TLE age; filter by minimum elevation, compass direction, or sunlit + dark sky. Sky View is a whole-sky chart looking up: north at top, east on the left, overhead at center and horizon at rim, with 30°/60° elevation rings. Tap a sky marker or select a row for the satellite name and current readouts; labels avoid overlapping when enabled. Stars/constellations and phone orientation tracking are not included. Select a row to label the satellite, or open its Live page. Loads all bundled catalog categories, including imports/lookups; this is not a catalog of every orbiting object and favorable lighting does not guarantee naked-eye visibility.
 - **Doppler calculator** with a bundled, *approximate* frequency table (FM repeaters, linear transponders, APRS/digital, APT/LRPT): live Doppler-corrected receive/transmit frequency, a passband slider for linear transponders, and a Doppler-vs-time table across any upcoming pass.
 - **Alerts**: "Next pass" countdown banner (favorites); per-pass reminders with the Notification API where the platform allows it; `.ics` calendar export (with an alert) for one pass or the whole list.
+- **Sky references**: both Sky Views include a shared **Show Moon, planets and Polaris** toggle (on by default). Above-horizon Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune and Polaris appear as labeled reference markers, with bearing/elevation readouts and the Moon’s illuminated percentage. Satellite filters/counts do not apply to these references; daylight and brightness may prevent seeing them, and some planets need optical aid. Calculations use [Astronomy Engine 2.1.19](https://github.com/cosinekitty/astronomy/tree/v2.1.19), MIT ([bundled license](js/vendor/astronomy-LICENSE.md), [source/provenance](js/vendor/astronomy-README.md)), with observer parallax and geometric elevations. Polaris is a lavender star labeled “Polaris · North Star”, with its own bearing/elevation readout. No runtime service or API key is needed.
 - **Offline**: app shell, bundled TLE snapshots for **every category** and the map are precached. First launch offline works from the snapshots; cached TLEs are used afterwards.
 
 ## Install
+
+Two executable helpers are available in the project root:
+
+```sh
+./start-web.sh                 # Python web server at http://127.0.0.1:8000/
+./build-install-mint.sh        # Build and install the Linux Mint desktop app
+```
+
+Both work from any working directory. The server stays in the foreground (Ctrl+C
+to stop), reuses a matching running server, and accepts another port, such as
+`./start-web.sh 8001`. The Mint script installs locked npm build dependencies,
+checks the desktop configuration, builds the Linux packages, then asks for sudo
+to install the `.deb`. Run it **without sudo**. It closes your installed SatPass
+copy before installation and preserves its settings; reopen it from the menu or
+with `satpass`. Use `--build-only` to skip closing/installing. Python 3 is required
+for the web server; Node 24 LTS (minimum 22.12) and npm are required for building.
+Existing user Node runtimes are detected, including the runtime on the original
+Mint development computer; `NODE_BIN=/path/to/node` selects another explicitly.
+Downloading build dependencies requires internet when they are not cached.
+
+**Linux desktop / Windows desktop**
+
+Use the packaged installers or build from this repository with Node 24: `npm ci`, then `npm run dist:linux` on Linux or `npm run dist:win` on Windows. The desktop app opens directly without a manually started web server. [Desktop instructions](electron/README.md) cover Linux Mint installation, separate saved settings, offline use, and the GitHub Actions build workflow.
 
 **iPhone / iPad (Safari)**
 1. Open the app URL in **Safari** (not an in-app browser).
@@ -151,6 +182,10 @@ Propagation uses **[satellite.js](https://github.com/shashwatak/satellite-js) 6.
 
 Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry, az/el/range/range-rate, Meeus low-precision sun position (~0.01°), cylindrical Earth-shadow test, pass search (20 s sampling + bisection for AOS/LOS, golden-section for max elevation), Doppler, `.ics`, Maidenhead.
 
+### Polaris reference
+
+Polaris uses the bundled Astronomy Engine `Star1` definition with [SIMBAD’s alf UMi catalog entry](https://simbad.u-strasbg.fr/simbad/sim-basic?Ident=Polaris) (Hipparcos re-reduction, van Leeuwen 2007): ICRS epoch J2000 RA 02h31m49.09456s, declination +89°15′50.7923″, parallax 7.54 mas (about 433 light-years). Astronomy Engine converts this to the observing point’s current geometric bearing/elevation, including precession/nutation and observer corrections. The small stellar proper motion is omitted (about 1 arcsecond from 2000 to 2026, below chart resolution). Polaris is not pinned to exact north, and is hidden whenever below the active point’s horizon. No star catalog download is needed at runtime.
+
 ## Approximations (read this)
 
 - **Geometric elevation.** Elevations, AOS and LOS use the geometric (airless) direction to the satellite. Atmospheric refraction (about 0.5° at the horizon, less higher up) is ignored, so a real signal can appear slightly before the predicted AOS and fade slightly after LOS. AOS/LOS are the times the satellite crosses your *minimum elevation* (default 10°), where refraction is only a few arc-minutes.
@@ -166,6 +201,29 @@ Everything else is our own code: TEME→ECEF rotation, WGS-84 observer geometry,
 - **LOS (or AOS) not found within the limit:** the pass is kept, the time is a lower bound and `truncated = true` (`aosTruncated` for the AOS side). The app shows "LOS ≥" on the list and a warning on the detail page.
 
 ## Release notes
+
+- **1.5.3** – Integrates guardst7's 1.3.6–1.5.2 work (globe, Visible Now, Sky View and 3D Sky, adaptive dashboards, Electron desktop app) after review. Desktop installers are unsigned (Windows shows an "unknown publisher" warning). Fixes a date-dependent store test.
+
+- **1.5.2** – Visible Now prioritizes the visualization in the wider left column, with a compact satellite list on the right and wrapping satellite names.
+- **1.5.1** – Overlay expand/restore controls for all four Live Tracker and Visible Now visualizations, retaining the app header/navigation and current view state.
+- **1.5.0** – Adaptive desktop/tablet/phone dashboards, adjacent pass previews, responsive canvas sizing and browser-assisted desktop location. See [layout implementation and review](docs/ADAPTIVE_LAYOUT.md).
+- **1.4.0** – Electron desktop app for Linux, with AppImage/Debian packages and a Windows NSIS build configuration/workflow. Bundled assets work offline from first launch; browser/PWA deployment remains available.
+
+- **1.3.13** – Decorative tree silhouettes give the 3D Sky horizon a clear edge, with distant and nearby layers that rotate with the view.
+
+- **1.3.12** – Interactive observer-centered 3D Sky tab on Live Tracker and Visible Now, with local Three.js, drag/touch/keyboard look, zoom, horizon/compass grid and object identification.
+
+- **1.3.11** – Polaris joins the reference layer in both Sky Views as a labeled lavender star, with calculated bearing/elevation from the active saved/custom point.
+
+- **1.3.10** – Optional Moon and seven-planet reference layer in both Sky Views, with selectable readouts and Moon illumination. Astronomy Engine 2.1.19 is bundled under MIT and precached for offline use.
+
+- **1.3.9** – Live Tracker gains the Sky View tab for the selected satellite, with saved-location readouts, below-horizon messaging, and remembered three-tab navigation.
+
+- **1.3.8** – Sky View is the third Visible Now tab: live whole-sky satellite chart from the same observing point, with compass/elevation grid, marker selection, shared filters, and optional labels.
+
+- **1.3.7** – Visible Now: all above-horizon catalog satellites at your saved location or a separate observing point, with compass/elevation readouts, condition filters, and multi-satellite map and globe.
+
+- **1.3.6** – Live view: separate 2D Map and 3D Globe tabs, remembered selection, interactive offline globe with satellite altitude, past/future trajectories, observer and coverage rings.
 
 - **1.3.5** – Service-worker fix for hosts that redirect `/index.html` → `/` (Cloudflare Pages): navigations after the first visit failed with a browser error page; the shell is now always cached/served as a plain response.
 - **1.3.4** – Own origin: served from Cloudflare Pages `https://satpass-3wj.pages.dev` (headers file, build script, redeploy docs, proxy origin), GitHub Pages is a deprecated mirror with a notice banner.

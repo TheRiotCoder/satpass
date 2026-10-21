@@ -14,7 +14,7 @@ ok("each radio entry is distinguishable (label + frequencies differ) so a wrong 
 const app = fs.readFileSync(path.join(__dirname, "..", "js", "app.js"), "utf8");
 const direct = [...app.matchAll(/ROUTES\.\w+\((?:a|\w*)\)/g)].map(m => m[0]);
 ok("app.js never calls ROUTES.<view>() directly (only via route()/rerender())", direct.length === 0, direct);
-ok("rerender() clears the view before rendering", /function rerender\(name, a\) \{ clearView\(\); ROUTES\[name\]\(a\); \}/.test(app));
+ok("rerender() clears the view before rendering", /function rerender\(name, a\) \{ clearView\(\);[^}]*ROUTES\[name\]\(a\);/.test(app));
 ok("every() timers are bound to the view token (stale callbacks are ignored)", /function every\(ms, fn\) \{ var tok = view\.token;[^}]*tok === view\.token/.test(app));
 ok("Doppler radio index comes from R.pickIndex(list length, stored) over bundled+live entries", /R\.pickIndex\(radios\.length, S\.load\("dopRadio:" \+ n/.test(app));
 ok("pickIndex clamps like pickRadio for any list length", R.pickIndex(5, 4) === 4 && R.pickIndex(5, 5) === 0 && R.pickIndex(5, -1) === 0 && R.pickIndex(0, 3) === 0 && R.pickIndex(3, "2") === 2 && R.pickIndex(3, NaN) === 0);
