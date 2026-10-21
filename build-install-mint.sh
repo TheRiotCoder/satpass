@@ -19,15 +19,13 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
   printf 'This installer targets 64-bit (x86_64) Linux Mint/Ubuntu.\n' >&2; exit 1
 fi
 
-# Prefer the user's PATH, then existing user runtimes. The final candidate is
-# the Node runtime already available on the original Mint development computer.
+# Prefer the user's PATH, then nvm-installed runtimes.
 if [[ -n "${NODE_BIN:-}" ]]; then
   candidates=("$NODE_BIN")
 else
   candidates=("$(command -v node || true)"
     "$HOME"/.nvm/versions/node/v24.*/bin/node
-    "$HOME"/.nvm/versions/node/v22.*/bin/node
-    "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node")
+    "$HOME"/.nvm/versions/node/v22.*/bin/node)
 fi
 node_bin=''
 for candidate in "${candidates[@]}"; do

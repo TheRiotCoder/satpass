@@ -202,6 +202,8 @@ Polaris uses the bundled Astronomy Engine `Star1` definition with [SIMBAD’s al
 
 ## Release notes
 
+- **1.5.3** – Integrates guardst7's 1.3.6–1.5.2 work (globe, Visible Now, Sky View and 3D Sky, adaptive dashboards, Electron desktop app) after review. Desktop installers are unsigned (Windows shows an "unknown publisher" warning). Fixes a date-dependent store test.
+
 - **1.5.2** – Visible Now prioritizes the visualization in the wider left column, with a compact satellite list on the right and wrapping satellite names.
 - **1.5.1** – Overlay expand/restore controls for all four Live Tracker and Visible Now visualizations, retaining the app header/navigation and current view state.
 - **1.5.0** – Adaptive desktop/tablet/phone dashboards, adjacent pass previews, responsive canvas sizing and browser-assisted desktop location. See [layout implementation and review](docs/ADAPTIVE_LAYOUT.md).
