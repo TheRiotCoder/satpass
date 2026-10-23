@@ -113,7 +113,7 @@ const ids = a => a.slice().sort((x, y) => x - y);
     ok("SAR refresh: one request per curated query, all to celestrak.org gp.php as JSON, no duplicates", requests.length === Sar.QUERIES.length && new Set(requests).size === requests.length && requests.every(u => u.startsWith("https://celestrak.org/NORAD/elements/gp.php?") && /FORMAT=json$/.test(u)), [requests.length, Sar.QUERIES.length]);
     ok("… no query touches the Starlink / OneWeb / COSMOS mega groups", requests.every(u => !/starlink|oneweb|NAME=COSMO&|NAME=COSMOS|GROUP=radar/i.test(u)));
     ok("… membership is replaced by what CelesTrak returned, filtered by the curated list (the 2 ICEYE records)", r.ok && JSON.stringify(ids(S.members("sar"))) === JSON.stringify([100889, 100914]), [r, S.members("sar")]);
-    ok("… origin becomes CelesTrak, stored in localStorage, manual refresh blocked for the next 2 h", S.catStatus("sar").origin === "CelesTrak" && !!ls["satpass:groups"] && JSON.parse(ls["satpass:groups"]).sar.ids.length === 2 && S.manualAllowed(Date.now(), "sar") === false && S.manualAllowed(Date.now() + 3 * 3600e3, "sar") === true);
+    ok("… origin becomes CelesTrak, stored in localStorage, automatic category refresh spaced for 2 h", S.catStatus("sar").origin === "CelesTrak" && !!ls["satpass:groups"] && JSON.parse(ls["satpass:groups"]).sar.ids.length === 2 && S.manualAllowed(Date.now(), "sar") === false && S.manualAllowed(Date.now() + 3 * 3600e3, "sar") === true);
     ok("… other categories untouched", S.members("amateur").length === 96);
     ok("… previously known TLEs of the old snapshot stay available (merge keeps satellites, e.g. Sentinel-1A TLE)", !!S.data.byId[39634]);
   }

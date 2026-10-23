@@ -437,16 +437,16 @@ const canvasInk = sel => ev(`(() => { const c=document.querySelector(${JSON.stri
       for (let i = 0; i < 40 && (await ev(`SatStore.data.origin`)) !== 'CelesTrak'; i++) await sleep(500);
       await go('#/sats'); await ev(`SatStore.constants && localStorage.removeItem('satpass:tlemeta')`); await go('#/sats');
       const before = await ev('SatStore.data.fetchedAt');
-      if (await ev(`document.querySelector('#refBtn').disabled`) && await ev(`SatStore.data.origin === 'CelesTrak'`)) {
+      if (await ev(`document.querySelector('#refBtn').disabled`)) {
         // the bundled snapshot was older than 6 h, so the automatic refresh at start-up already pulled live CelesTrak data (and the manual button is correctly rate-limited)
-        check('Refresh: automatic start-up refresh already updated from live CelesTrak (manual button disabled by the 2 h courtesy rule)', await ev(`JSON.parse(localStorage.getItem('satpass:tle')).origin === 'CelesTrak' && SatStore.data.sats.length > 100`));
+        check('Refresh: automatic start-up refresh already updated from live CelesTrak (button busy)', await ev(`JSON.parse(localStorage.getItem('satpass:tle')).origin === 'CelesTrak' && SatStore.data.sats.length > 100`));
       } else {
       await ev(`document.querySelector('#refBtn').click()`);
       let done = false; for (let i = 0; i < 60 && !done; i++) { await sleep(1000); done = await ev(`!!document.querySelector('#refResult')`); }
       const msg = done ? await ev(`document.querySelector('#refResult').textContent`) : 'timeout; button=' + await ev(`document.querySelector('#refBtn') && document.querySelector('#refBtn').textContent`) + ' lastError=' + await ev('SatStore.lastError()') + ' hash=' + await ev('location.hash');
       check('Refresh button: live CelesTrak refresh succeeds', done && /Updated \d+ element sets/.test(msg), msg);
       check('refreshed data cached with new fetch timestamp + origin CelesTrak', await ev(`SatStore.data.fetchedAt > ${before} && SatStore.data.origin === 'CelesTrak' && JSON.parse(localStorage.getItem('satpass:tle')).origin === 'CelesTrak'`));
-      check('refresh button now disabled (rate-limit courtesy)', await ev(`document.querySelector('#refBtn').disabled`));
+      check('refresh button enabled again right after a refresh (no manual cooldown since 1.5.4)', !(await ev(`document.querySelector('#refBtn').disabled`)));
       }
       await go('#/passes'); await sleep(2500);
       check('passes recomputed after refresh', await ev(`document.querySelectorAll('.pass').length`) >= 3);

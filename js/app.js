@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   var S = window.SatStore, P = window.SatPasses, G = window.SatGrid, D = window.SatDoppler, F = window.SatFmt, Tle = window.SatTle, R = window.SatRadio, I = window.SatIcs, Dr = window.SatDraw, Sar = window.SatSar, Cat = window.SatCatalog, Src = window.SatSources;
-  var DAY = 86400000, APP_VERSION = "1.5.3";
+  var DAY = 86400000, APP_VERSION = "1.5.4";
   var main, titleEl;
 
   /* ---------- tiny helpers ---------- */
@@ -1231,15 +1231,14 @@
       var d = dataStatus(), lo = S.lastOk(), le = S.lastError();
       $("#dsText").innerHTML = esc(d.text) + " <b>" + S.data.sats.length + "</b> satellites." + (d.stale ? ' <span class="tag warn">older than ' + Tle.STALE_DAYS + " d</span>" : "");
       $("#dsMsg").innerHTML = (d.stale ? '<div class="banner warn">⚠️ Element sets are older than ' + Tle.STALE_DAYS + " days. Predictions degrade quickly with age – refresh when online.</div>" : "") + (le && !refreshing ? '<div class="banner">Last refresh problem: ' + esc(le) + "</div>" : "");
-      var allowed = S.manualAllowed(), nxt = lo ? new Date(lo + S.constants.MIN_MANUAL_MS) : null;
-      $("#refBtn").disabled = refreshing || (!allowed && lo > 0);
+      $("#refBtn").disabled = refreshing;   // manual refresh is always allowed (1.5.4); only an in-flight refresh disables it
       var chain = S.sources.chain().map(function (id) { var rd = S.sources.readiness(id); return S.sources.META[id].label + (rd.ready ? "" : " (not set up)"); });
-      $("#refNote").textContent = "Sources, in order (Setup → Data sources): " + (chain.join(" → ") || "none enabled") + ". The first one that answers wins; if it fails the next is tried. CelesTrak is asked at most every " + S.constants.AUTO_REFRESH_MS / 3600e3 + " h automatically (core groups) and manually at most every " + S.constants.MIN_MANUAL_MS / 3600e3 + " h" + (!allowed && nxt ? " (next refresh available " + nxt.toLocaleTimeString() + ")" : "") + "; Space-Track at most hourly per query.";
+      $("#refNote").textContent = "Sources, in order (Setup → Data sources): " + (chain.join(" → ") || "none enabled") + ". The first one that answers wins; if it fails the next is tried. CelesTrak is asked at most every " + S.constants.AUTO_REFRESH_MS / 3600e3 + " h automatically (core groups); you can refresh manually any time you are online. CelesTrak may throttle frequent pulls (it asks for about one per query every 2 h) – if it says to slow down, wait a while and try again. Space-Track at most hourly per query.";
       var c = curCat(), cb = $("#refCatBtn"), cn = $("#catNote");
       if (c && !c.core) {
-        var cs = S.catStatus(c.id), co = S.lastOk(c.id), ok2 = S.manualAllowed(Date.now(), c.id), nx2 = co ? new Date(co + S.constants.MIN_MANUAL_MS) : null;
-        cb.hidden = false; cb.disabled = refreshing || (!ok2 && co > 0); if (!refreshing) cb.textContent = "⟳ Refresh " + c.label + " (" + c.fetch.length + " quer" + (c.fetch.length > 1 ? "ies" : "y") + ")";
-        cn.textContent = c.label + " data: " + (cs.origin === "bundled snapshot" || cs.origin === "none" ? "bundled snapshot" : cs.origin + " (live fetch)") + ", fetched " + (cs.fetchedAt ? new Date(cs.fetchedAt).toLocaleString() + " (" + F.age(Date.now() - cs.fetchedAt) + " ago)" : "—") + ". Fetched only when you open this category and it is older than " + S.constants.CAT_AUTO_MS / 3600e3 + " h (or when you tap refresh)" + (!ok2 && nx2 ? "; next manual refresh " + nx2.toLocaleTimeString() : "") + "." + (S.lastError(c.id) && !refreshing ? " Last problem: " + S.lastError(c.id) : "");
+        var cs = S.catStatus(c.id), co = S.lastOk(c.id);
+        cb.hidden = false; cb.disabled = refreshing; if (!refreshing) cb.textContent = "⟳ Refresh " + c.label + " (" + c.fetch.length + " quer" + (c.fetch.length > 1 ? "ies" : "y") + ")";
+        cn.textContent = c.label + " data: " + (cs.origin === "bundled snapshot" || cs.origin === "none" ? "bundled snapshot" : cs.origin + " (live fetch)") + ", fetched " + (cs.fetchedAt ? new Date(cs.fetchedAt).toLocaleString() + " (" + F.age(Date.now() - cs.fetchedAt) + " ago)" : "—") + ". Fetched only when you open this category and it is older than " + S.constants.CAT_AUTO_MS / 3600e3 + " h (or whenever you tap refresh)." + (S.lastError(c.id) && !refreshing ? " Last problem: " + S.lastError(c.id) : "");
       } else { cb.hidden = true; cn.textContent = ""; }
     }
     var refreshing = false;

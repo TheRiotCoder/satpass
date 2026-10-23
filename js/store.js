@@ -27,7 +27,7 @@
   Cat.CORE.forEach(function (id) { Cat.BY_ID[id].fetch.forEach(function (f) { SOURCES.push({ id: f.id, url: Cat.queryUrl(f) }); }); });
   var AUTO_REFRESH_MS = 6 * 3600e3;   // CelesTrak updates GP data every few hours; don't ask more often than this automatically
   var CAT_AUTO_MS = 24 * 3600e3;      // non-core categories (SAR, EO, navigation, science) refresh themselves at most once a day, and only when in use
-  var MIN_MANUAL_MS = 2 * 3600e3;     // manual "refresh" blocked until the data is at least this old (CelesTrak asks for ≤ 1 request per 2 h per query)
+  var MIN_MANUAL_MS = 2 * 3600e3;     // spacing for the automatic open-a-category refresh only (manualAllowed); the manual Refresh buttons are never locked (1.5.4)
   var FAIL_BACKOFF_MS = 30 * 60e3;    // after a failure wait this long before retrying automatically
   var data = { sats: [], byId: {}, fetchedAt: 0, source: "", origin: "bundled", groups: {}, catInfo: {} };
   var listeners = [];

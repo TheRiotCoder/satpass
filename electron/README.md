@@ -13,15 +13,15 @@ On Linux Mint, open the `.deb` installer with your package installer. It install
 SatPass into your applications menu. Or install from a terminal:
 
 ```sh
-sudo apt install ./release/SatPass-1.5.3-linux-amd64.deb
+sudo apt install ./release/SatPass-1.5.4-linux-amd64.deb
 ```
 
 The AppImage is an alternative portable package. Mark it executable in its file
 properties and open it, or run:
 
 ```sh
-chmod +x release/SatPass-1.5.3-linux-x86_64.AppImage
-./release/SatPass-1.5.3-linux-x86_64.AppImage
+chmod +x release/SatPass-1.5.4-linux-x86_64.AppImage
+./release/SatPass-1.5.4-linux-x86_64.AppImage
 ```
 
 Some Linux systems need FUSE support to mount AppImages; use the `.deb` on Mint

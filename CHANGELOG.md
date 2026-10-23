@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.5.4 – Manual refresh always allowed
+- The Sats-tab Refresh button and the per-category refresh buttons are no longer locked for 2 h after a successful refresh; they are only disabled while a refresh is running. Automatic refresh spacing, CelesTrak "slow down" / rate-limit handling and Space-Track's hourly-per-query rule are unchanged. The note under the button now says CelesTrak may throttle frequent pulls.
+
 ## 1.5.3 – Integrate guardst7's work (1.3.6–1.5.2)
 - Integrates the work of guardst7 (thank you!): 3D globe, Visible Now, Sky View and 3D Sky with Moon/planet/Polaris references, adaptive dashboards and expand controls, and the Electron desktop app (Linux AppImage/deb, Windows NSIS). Vendored Astronomy Engine 2.1.19 and three.js r180 verified byte-identical to upstream (MIT). Reviewed: no new network hosts, CSP, vault, proxy-origin or service-worker-strategy changes; the desktop app is not part of the deployed web site.
 - Review follow-ups: GitHub Actions in the desktop workflow pinned to commit SHAs; the workflow is parked at electron/desktop-workflow.yml (not enabled); README notes that desktop installers are unsigned; build-install-mint.sh no longer falls back to a Node binary in a tool-specific cache directory.
